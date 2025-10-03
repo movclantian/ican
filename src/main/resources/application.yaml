@@ -1,0 +1,275 @@
+--- ### 应用配置
+application:
+  id: ican
+  # 名称
+  name: ICan
+  # 描述
+  description: ICan Application
+  # 版本
+  version: 0.0.1-SNAPSHOT
+  # 基本包
+  base-package: com.ican
+  ## 作者信息配置
+  contact:
+    name: ICan
+    email: example@example.com
+    url: https://example.com
+  ## 许可协议信息配置
+  license:
+    name: Apache-2.0
+    url: https://example.com/LICENSE
+
+--- ### Spring 配置
+spring:
+  application:
+    name: ican
+  
+  ## 数据源配置
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/ican?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
+  
+  ## Redis 配置
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: 
+      database: 0
+      timeout: 10s
+      lettuce:
+        pool:
+          # 连接池最大连接数
+          max-active: 200
+          # 连接池最大阻塞等待时间(使用负值表示没有限制)
+          max-wait: -1ms
+          # 连接池中的最大空闲连接
+          max-idle: 10
+          # 连接池中的最小空闲连接
+          min-idle: 0
+  
+  ## Jackson 配置
+  jackson:
+    # 日期格式化
+    date-format: yyyy-MM-dd HH:mm:ss
+    # 时区
+    time-zone: GMT+8
+    # 序列化配置
+    serialization:
+      # 格式化输出
+      indent-output: false
+      # 忽略无法转换的对象
+      fail-on-empty-beans: false
+    # 反序列化配置
+    deserialization:
+      # 忽略未知属性
+      fail-on-unknown-properties: false
+
+--- ### 服务器配置
+server:
+  port: 8080
+  servlet:
+    # 应用的访问路径
+    context-path: /
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+  ## 服务器扩展配置
+  extension:
+    enabled: true
+    # 默认禁止三个不安全的 HTTP 方法（CONNECT、TRACE、TRACK）
+    disallowed-methods:
+      - CONNECT
+      - TRACE
+      - TRACK
+
+--- ### 线程池配置
+spring.task:
+  # 异步任务
+  execution:
+    thread-name-prefix: task-pool
+    rejected-policy: CALLER_RUNS
+    pool:
+      keep-alive: 300s
+    shutdown:
+      await-termination: true
+      await-termination-period: 30s
+  # 定时任务
+  scheduling:
+    thread-name-prefix: schedule-pool
+    rejected-policy: CALLER_RUNS
+    shutdown:
+      await-termination: true
+      await-termination-period: 30s
+
+--- ### MyBatis Plus 配置
+mybatis-plus:
+  configuration:
+    # 是否开启自动驼峰命名规则映射
+    map-underscore-to-camel-case: true
+    # 日志实现
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      # 全局逻辑删除字段名
+      logic-delete-field: deleted
+      # 逻辑已删除值
+      logic-delete-value: 1
+      # 逻辑未删除值
+      logic-not-delete-value: 0
+  # Mapper XML 文件位置
+  mapper-locations: classpath*:/mapper/**/*.xml
+
+--- ### Sa-Token 配置
+sa-token:
+  # token 名称 (同时也是 cookie 名称)
+  token-name: Authorization
+  # token 有效期(单位:秒) 默认30天, -1 代表永久有效
+  timeout: 2592000
+  # token 临时有效期 (指定时间内无操作就视为token过期) 单位: 秒
+  active-timeout: -1
+  # 是否允许同一账号并发登录 (为 true 时允许一起登录, 为 false 时新登录挤掉旧登录)
+  is-concurrent: true
+  # 在多人登录同一账号时,是否共用一个 token (为 true 时所有登录共用一个 token, 为 false 时每次登录新建一个 token)
+  is-share: true
+  # token 风格
+  token-style: uuid
+  # 是否输出操作日志
+  is-log: false
+
+--- ### Knife4j 接口文档配置
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+    enable-footer: false
+    enable-footer-custom: true
+    footer-custom-content: Apache License 2.0 | Copyright © 2024 [ICan](https://example.com)
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+  group-configs:
+    - group: 'default'
+      paths-to-match: '/**'
+      packages-to-scan: com.ican
+
+--- ### 日志配置
+logging:
+  level:
+    root: INFO
+    '[com.ican]': DEBUG
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n'
+    file: '%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n'
+
+--- ### ContiNew Starter 日志配置
+continew-starter:
+  log:
+    # 记录信息
+    includes:
+      - DESCRIPTION
+      - MODULE
+      - REQUEST_HEADERS
+      - REQUEST_BODY
+      - IP_ADDRESS
+      - BROWSER
+      - OS
+      - RESPONSE_HEADERS
+      - RESPONSE_BODY
+    # 访问日志配置
+    access-log:
+      # 是否打印访问日志（类似于 Nginx access log）
+      enabled: true
+      # 是否打印请求参数（body/query/form）
+      print-request-param: true
+      # 是否自动截断超长参数值（如 base64、大文本）
+      long-param-truncate: true
+      # 超长参数检测阈值（单位：字符）
+      long-param-threshold: 2000
+      # 超长参数最大保留长度（单位：字符）
+      long-param-max-length: 50
+      # 截断后追加的后缀符号
+      long-param-suffix: ...
+      # 是否过滤敏感参数
+      param-sensitive: true
+      # 敏感参数字段列表
+      sensitive-params:
+        - password
+        - oldPassword
+        - token
+  
+  ## Web 模块配置
+  web:
+    # 跨域配置
+    cors:
+      enabled: true
+      # 配置允许跨域的域名
+      allowed-origins: '*'
+      # 配置允许跨域的请求方式
+      allowed-methods: '*'
+      # 配置允许跨域的请求头
+      allowed-headers: '*'
+      # 配置允许跨域的响应头
+      exposed-headers: '*'
+    
+    # 全局响应配置
+    response:
+      # 是否开启国际化（默认：false）
+      i18n: false
+      # 自定义失败 HTTP 状态码（默认：200，建议业务和通信状态码区分）
+      default-http-status-code-on-error: 200
+      # 自定义成功响应码（默认：0）
+      default-success-code: 0
+      # 自定义成功提示（默认：ok）
+      default-success-msg: 操作成功
+      # 自定义失败响应码（默认：1）
+      default-error-code: 1
+      # 自定义失败提示（默认：error）
+      default-error-msg: 操作失败
+      # 是否将原生异常错误信息填充到状态信息中
+      origin-exception-using-detail-message: true
+      # 响应类全名（配置后 response-style 将不再生效）
+      response-class-full-name: top.continew.starter.web.model.R
+
+--- ### 文件上传配置
+spring.servlet:
+  multipart:
+    # 单个文件最大大小
+    max-file-size: 10MB
+    # 请求最大大小
+    max-request-size: 100MB
+
+--- ### 验证码配置
+continew-starter.captcha:
+  graphic:
+    enabled: true
+    # 验证码类型
+    # ARITHMETIC：算术验证
+    # CHINESE：中文验证
+    # CHINESE_GIF：中文闪图验证
+    # SPEC：英文验证
+    # GIF：英文闪图验证
+    type: SPEC
+    # 验证码长度
+    length: 4
+    # 图片宽度
+    width: 130
+    # 图片高度
+    height: 48
+    # 字体大小
+    fontSize: 32
+
+--- ### 验证码业务配置
+captcha:
+  # 验证码在 Redis 中的 key 前缀
+  redis-key-prefix: 'captcha:'
+  # 验证码过期时间(分钟)
+  expire-minutes: 5

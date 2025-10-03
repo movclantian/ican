@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>top.continew.starter</groupId>
+		<artifactId>continew-starter</artifactId>
+		<version>2.13.4</version>
+	</parent>
+	<groupId>com.ican</groupId>
+	<artifactId>ican</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>ican</name>
+	<url />
+	<licenses>
+		<license />
+	</licenses>
+	<developers>
+		<developer />
+	</developers>
+	<scm>
+		<connection />
+		<developerConnection />
+		<tag />
+		<url />
+	</scm>
+	<properties>
+		<java.version>17</java.version>
+	</properties>
+	<dependencies>
+		<!-- ContiNew Starter 核心模块，提供基础配置与通用工具类 -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-core</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter Web 模块，提供常用的 Web 功能 -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-web</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter JSON 模块 (Jackson) -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-json-jackson</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter API 文档模块 (Spring Doc + Knife4j) -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-api-doc</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter 校验模块 (Hibernate Validator) -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-validation</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter 数据访问模块 (MyBatis Plus) -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-data-mp</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter 缓存模块 (Redisson) -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-cache-redisson</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter 认证模块 (Sa-Token) -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-auth-satoken</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter 日志模块 (基于拦截器实现) -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-log-interceptor</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter 安全模块 - 加密 -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-security-crypto</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter Excel 模块 (FastExcel) -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-excel-fastexcel</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter 验证码模块 - 图形验证码 -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-captcha-graphic</artifactId>
+		</dependency>
+
+		<!-- ContiNew Starter 存储模块 - 本地存储 -->
+		<dependency>
+			<groupId>top.continew.starter</groupId>
+			<artifactId>continew-starter-storage-local</artifactId>
+		</dependency>
+
+		<!-- MySQL 驱动 -->
+		<dependency>
+			<groupId>com.mysql</groupId>
+			<artifactId>mysql-connector-j</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+	</dependencies>
+	<dependencyManagement>
+		<dependencies>
+			<!-- ContiNew Starter Dependencies -->
+			<dependency>
+				<groupId>top.continew.starter</groupId>
+				<artifactId>continew-starter-dependencies</artifactId>
+				<version>${project.parent.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.13.0</version>
+				<configuration>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+				<version>3.3.5</version>
+				<configuration>
+					<excludes>
+						<exclude>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+						</exclude>
+					</excludes>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>
