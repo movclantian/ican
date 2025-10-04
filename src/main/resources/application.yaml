@@ -29,14 +29,14 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/ican?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
     username: root
-    password: root
+    password: "051105"
   
   ## Redis 配置
   data:
     redis:
       host: localhost
       port: 6379
-      password: 
+      #password: 
       database: 0
       timeout: 10s
       lettuce:
@@ -273,3 +273,35 @@ captcha:
   redis-key-prefix: 'captcha:'
   # 验证码过期时间(分钟)
   expire-minutes: 5
+
+spring.ai:
+  ## Retry 配置 - 用于处理超时和重试机制
+  retry:
+    # 最大重试次数
+    max-attempts: 3
+    backoff:
+      # 初始退避间隔(毫秒)
+      initial-interval: 2000
+      # 退避间隔乘数
+      multiplier: 2
+      # 最大退避间隔(毫秒)
+      max-interval: 10000
+    # 是否对客户端错误(4xx)进行重试
+    on-client-errors: false
+  openai:
+    api-key: sk-024fe9ab6fcd4cc68232b340ac141cbf
+    base-url: https://api.deepseek.com
+    chat:
+      options:
+        model: deepseek-chat
+        # 温度参数(0.0-2.0),控制响应的随机性
+        temperature: 0.7
+        # 最大生成token数,避免响应过长导致超时
+        max-tokens: 2000
+  ## Chat Memory 配置
+  chat:
+    memory:
+      repository:
+        jdbc:
+          # 自动初始化数据库表结构
+          initialize-schema: always

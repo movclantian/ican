@@ -1,4 +1,4 @@
-package com.ican.Exception;
+package com.ican.exception;
 
 import cn.dev33.satoken.exception.NotLoginException;
 import lombok.extern.slf4j.Slf4j;

@@ -101,9 +101,32 @@
 			<scope>runtime</scope>
 		</dependency>
 
+		<dependency>
+			<groupId>cn.dev33</groupId>
+			<artifactId>sa-token-redis-template</artifactId>
+			<version>1.44.0</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-openai</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-chat-memory-repository-jdbc</artifactId>
+		</dependency>
+
 	</dependencies>
 	<dependencyManagement>
 		<dependencies>
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>1.0.3</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
 			<!-- ContiNew Starter Dependencies -->
 			<dependency>
 				<groupId>top.continew.starter</groupId>
@@ -122,6 +145,7 @@
 				<artifactId>maven-compiler-plugin</artifactId>
 				<version>3.13.0</version>
 				<configuration>
+					<parameters>true</parameters>
 					<annotationProcessorPaths>
 						<path>
 							<groupId>org.projectlombok</groupId>
