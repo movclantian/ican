@@ -88,9 +88,13 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException("用户名或密码不能为空");
         }
 
-        // 2. 验证码校验
+        // 2. 验证码校验(如果提供了验证码key,则必须验证)
         if (StrUtil.isNotBlank(loginRequest.getCaptchaKey())) {
             validateCaptcha(loginRequest.getCaptchaKey(), loginRequest.getCaptcha());
+        }
+        // 如果提供了验证码但没有提供key,也需要报错
+        if (StrUtil.isNotBlank(loginRequest.getCaptcha()) && StrUtil.isBlank(loginRequest.getCaptchaKey())) {
+            throw new BusinessException("验证码key不能为空");
         }
 
         // 3. 查询用户
@@ -155,9 +159,13 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException("两次密码输入不一致");
         }
 
-        // 2. 验证码校验
+        // 2. 验证码校验(如果提供了验证码key,则必须验证)
         if (StrUtil.isNotBlank(registerRequest.getCaptchaKey())) {
             validateCaptcha(registerRequest.getCaptchaKey(), registerRequest.getCaptcha());
+        }
+        // 如果提供了验证码但没有提供key,也需要报错
+        if (StrUtil.isNotBlank(registerRequest.getCaptcha()) && StrUtil.isBlank(registerRequest.getCaptchaKey())) {
+            throw new BusinessException("验证码key不能为空");
         }
 
         // 3. 检查用户名是否已存在

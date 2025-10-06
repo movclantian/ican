@@ -81,6 +81,7 @@ public class AuthController {
      *
      * @return 登录状态
      */
+    @SaIgnore
     @GetMapping("/check")
     @Operation(summary = "检查登录状态", description = "检查用户当前是否处于登录状态")
     public Boolean checkLogin() {

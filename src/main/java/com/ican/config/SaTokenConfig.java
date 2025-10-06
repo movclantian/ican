@@ -10,6 +10,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
+import org.springframework.lang.NonNull;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -28,7 +29,7 @@ public class SaTokenConfig implements WebMvcConfigurer {
      * 注册 Sa-Token 拦截器
      */
     @Override
-    public void addInterceptors(InterceptorRegistry registry) {
+    public void addInterceptors(@NonNull InterceptorRegistry registry) {
         // 注册 Sa-Token 拦截器,打开注解式鉴权功能
         registry.addInterceptor(new SaInterceptor(handle -> {
             // 指定需要拦截的路径

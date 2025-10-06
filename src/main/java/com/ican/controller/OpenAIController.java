@@ -1,5 +1,6 @@
 package com.ican.controller;
 
+import cn.dev33.satoken.annotation.SaCheckLogin;
 import com.ican.model.dto.ChatRequestDTO;
 import com.ican.model.vo.ChatMessageVO;
 import com.ican.model.vo.ChatResponseVO;
@@ -26,6 +27,7 @@ import java.util.List;
 @Log(ignore = true)
 @RequestMapping("/ai")
 @RequiredArgsConstructor
+@SaCheckLogin
 public class OpenAIController {
 
     private final ChatService chatService;
