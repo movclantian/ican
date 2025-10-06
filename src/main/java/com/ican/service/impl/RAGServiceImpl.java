@@ -2,6 +2,8 @@ package com.ican.service.impl;
 
 import cn.dev33.satoken.stp.StpUtil;
 import com.ican.config.RAGConfig;
+import com.ican.mapper.DocumentMapper;
+import com.ican.model.entity.DocumentDO;
 import com.ican.model.vo.PaperSummaryVO;
 import com.ican.model.vo.TeachingPlanVO;
 import com.ican.service.RAGService;
@@ -17,7 +19,6 @@ import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
-import org.springframework.ai.vectorstore.redis.RedisVectorStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -41,6 +42,7 @@ public class RAGServiceImpl implements RAGService {
     private final VectorStore vectorStore;
     private final RAGConfig ragConfig;
     private final JdbcChatMemoryRepository chatMemoryRepository;
+    private final DocumentMapper documentMapper;
     
     @Value("classpath:/prompts/qa-with-context.st")
     private Resource qaPromptResource;
@@ -55,7 +57,7 @@ public class RAGServiceImpl implements RAGService {
     public String ragChat(String conversationId, String query) {
         log.info("RAG问答: conversationId={}, query={}", conversationId, query);
         
-        // 获取当前用户ID
+        // 获取当前用户ID（拦截器已确保用户已登录）
         Long userId = StpUtil.getLoginIdAsLong();
         
         // 获取对话历史
@@ -106,6 +108,10 @@ public class RAGServiceImpl implements RAGService {
     public String documentChat(Long documentId, String query) {
         log.info("文档问答: documentId={}, query={}", documentId, query);
         
+        // 验证文档权限（拦截器已确保用户已登录）
+        Long userId = StpUtil.getLoginIdAsLong();
+        validateDocumentAccess(documentId, userId);
+        
         // 构建搜索请求 - 只检索指定文档的内容
         SearchRequest searchRequest = SearchRequest.builder()
             .query(query)
@@ -136,6 +142,10 @@ public class RAGServiceImpl implements RAGService {
     @Override
     public PaperSummaryVO summarizePaper(Long documentId) {
         log.info("论文总结: documentId={}", documentId);
+        
+        // 验证文档权限（拦截器已确保用户已登录）
+        Long userId = StpUtil.getLoginIdAsLong();
+        validateDocumentAccess(documentId, userId);
         
         // 构建搜索请求 - 检索文档所有内容
         SearchRequest searchRequest = SearchRequest.builder()
@@ -211,6 +221,19 @@ public class RAGServiceImpl implements RAGService {
         } catch (Exception e) {
             log.error("教学设计生成失败: topic={}", topic, e);
             throw new BusinessException("教学设计生成失败,请稍后重试");
+        }
+    }
+    
+    /**
+     * 验证文档访问权限
+     */
+    private void validateDocumentAccess(Long documentId, Long userId) {
+        DocumentDO document = documentMapper.selectById(documentId);
+        if (document == null) {
+            throw new BusinessException("文档不存在");
+        }
+        if (!document.getUserId().equals(userId)) {
+            throw new BusinessException("无权访问该文档");
         }
     }
 }

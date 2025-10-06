@@ -9,6 +9,8 @@ import com.ican.model.vo.DocumentVO;
 import com.ican.service.SearchService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import top.continew.starter.core.exception.BusinessException;
+
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -38,8 +40,14 @@ public class SearchServiceImpl implements SearchService {
     public List<DocumentVO> searchDocuments(String keyword, String type, Long userId) {
         log.info("全文搜索: keyword={}, type={}, userId={}", keyword, type, userId);
         
+        // 验证用户ID
+        if (userId == null) {
+            throw new BusinessException("用户ID不能为空");
+        }
+        
         LambdaQueryWrapper<DocumentDO> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(DocumentDO::getUserId, userId);
+        wrapper.eq(DocumentDO::getUserId, userId)
+               .eq(DocumentDO::getIsDeleted, 0); // 只查询未删除的文档
         
         if (StrUtil.isNotBlank(type)) {
             wrapper.eq(DocumentDO::getType, type);
@@ -62,6 +70,14 @@ public class SearchServiceImpl implements SearchService {
     public List<DocumentVO> hybridSearch(String query, Long userId) {
         log.info("混合搜索: query={}, userId={}", query, userId);
         
+        // 验证参数
+        if (userId == null) {
+            throw new BusinessException("用户ID不能为空");
+        }
+        if (StrUtil.isBlank(query)) {
+            return new ArrayList<>();
+        }
+        
         try {
             // 1. 向量检索 - 基于语义相似度
             SearchRequest searchRequest = SearchRequest.builder()
@@ -79,15 +95,17 @@ public class SearchServiceImpl implements SearchService {
                 Object docIdObj = doc.getMetadata().get("documentId");
                 if (docIdObj != null) {
                     Long docId = Long.valueOf(docIdObj.toString());
-                    // 使用相似度作为分数
-                    Double score = 1.0; // 默认分数
+                    // 使用相似度分数，如果没有则使用默认值
+                    Double score = doc.getMetadata().get("similarity") != null ? 
+                        Double.valueOf(doc.getMetadata().get("similarity").toString()) : 0.8;
                     vectorScores.put(docId, score);
                 }
             }
             
             // 2. 全文检索 - 基于关键词匹配
             LambdaQueryWrapper<DocumentDO> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(DocumentDO::getUserId, userId);
+            wrapper.eq(DocumentDO::getUserId, userId)
+                   .eq(DocumentDO::getIsDeleted, 0); // 只查询未删除的文档
             
             if (StrUtil.isNotBlank(query)) {
                 wrapper.like(DocumentDO::getTitle, query);
@@ -96,11 +114,11 @@ public class SearchServiceImpl implements SearchService {
             wrapper.orderByDesc(DocumentDO::getCreateTime);
             List<DocumentDO> textResults = documentMapper.selectList(wrapper);
             
-            // 提取全文检索的文档ID
+            // 提取全文检索的文档ID和分数
             Map<Long, Double> textScores = new HashMap<>();
             for (DocumentDO doc : textResults) {
-                // 简单的TF分数：标题完全匹配得分更高
-                double score = doc.getTitle().equalsIgnoreCase(query) ? 2.0 : 1.0;
+                // 改进的TF分数计算
+                double score = calculateTextScore(doc.getTitle(), query);
                 textScores.put(doc.getId(), score);
             }
             
@@ -148,6 +166,39 @@ public class SearchServiceImpl implements SearchService {
             log.warn("降级到全文搜索");
             return searchDocuments(query, null, userId);
         }
+    }
+    
+    /**
+     * 计算文本匹配分数
+     */
+    private double calculateTextScore(String title, String query) {
+        if (StrUtil.isBlank(title) || StrUtil.isBlank(query)) {
+            return 0.0;
+        }
+        
+        String lowerTitle = title.toLowerCase();
+        String lowerQuery = query.toLowerCase();
+        
+        // 完全匹配得分最高
+        if (lowerTitle.equals(lowerQuery)) {
+            return 3.0;
+        }
+        
+        // 包含查询词
+        if (lowerTitle.contains(lowerQuery)) {
+            // 计算匹配度
+            int matchCount = 0;
+            String[] queryWords = lowerQuery.split("\\s+");
+            for (String word : queryWords) {
+                if (lowerTitle.contains(word)) {
+                    matchCount++;
+                }
+            }
+            return 1.0 + (double) matchCount / queryWords.length;
+        }
+        
+        // 部分匹配
+        return 0.5;
     }
     
     /**

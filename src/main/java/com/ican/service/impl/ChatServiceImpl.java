@@ -362,7 +362,11 @@ public class ChatServiceImpl implements ChatService {
                         conversationId, fullResponse.length());
                 }
                 
-                emitter.completeWithError(error);
+                try {
+                    emitter.completeWithError(error);
+                } catch (Exception e) {
+                    log.error("发送错误响应失败: conversationId={}", conversationId, e);
+                }
             })
             .subscribe();
         
@@ -491,7 +495,11 @@ public class ChatServiceImpl implements ChatService {
                         conversationId, fullResponse.length());
                 }
                 
-                emitter.completeWithError(error);
+                try {
+                    emitter.completeWithError(error);
+                } catch (Exception e) {
+                    log.error("发送RAG错误响应失败: conversationId={}", conversationId, e);
+                }
             })
             .subscribe();
         
@@ -511,6 +519,7 @@ public class ChatServiceImpl implements ChatService {
         // 只查询当前用户的会话
         LambdaQueryWrapper<ChatSessionDO> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(ChatSessionDO::getUserId, currentUserId)
+               .eq(ChatSessionDO::getIsDeleted, 0)  // 只查询未删除的会话
                .orderByDesc(ChatSessionDO::getUpdateTime);
 
         List<ChatSessionDO> sessions = chatSessionMapper.selectList(wrapper);
@@ -551,6 +560,11 @@ public class ChatServiceImpl implements ChatService {
         // 如果传入的 userId 不为空且不等于当前用户ID,则抛出异常
         if (userId != null && !userId.equals(currentUserId)) {
             throw new BusinessException("无权为其他用户创建会话");
+        }
+        
+        // 验证标题长度
+        if (StrUtil.isNotBlank(title) && title.length() > 100) {
+            title = title.substring(0, 100);
         }
         
         // 使用当前用户ID创建会话

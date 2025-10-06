@@ -75,16 +75,22 @@ public class DocumentServiceImpl implements DocumentService {
             documentMapper.updateById(document);
             
             String content = documentParserService.parseDocument(file);
-            vectorizeAndStore(document.getId(), content);
+            if (StrUtil.isBlank(content)) {
+                throw new BusinessException("文档内容为空，无法处理");
+            }
+            
+            vectorizeAndStore(document.getId(), content, document.getUserId());
             
             // 更新状态为已完成
             document.setStatus("completed");
+            document.setUpdateTime(LocalDateTime.now());
             documentMapper.updateById(document);
             
             log.info("文档处理完成: id={}", document.getId());
         } catch (Exception e) {
             log.error("文档处理失败: id={}", document.getId(), e);
             document.setStatus("failed");
+            document.setUpdateTime(LocalDateTime.now());
             documentMapper.updateById(document);
             throw e; // 重新抛出异常
         }
@@ -158,10 +164,15 @@ public class DocumentServiceImpl implements DocumentService {
     
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void vectorizeAndStore(Long documentId, String content) {
+    public void vectorizeAndStore(Long documentId, String content, Long userId) {
         DocumentDO document = documentMapper.selectById(documentId);
         if (document == null) {
             throw new BusinessException("文档不存在");
+        }
+        
+        // 验证用户权限
+        if (!document.getUserId().equals(userId)) {
+            throw new BusinessException("无权处理该文档");
         }
         
         try {
@@ -184,7 +195,7 @@ public class DocumentServiceImpl implements DocumentService {
                 .map(doc -> {
                     Map<String, Object> metadata = new HashMap<>();
                     metadata.put("documentId", documentId);
-                    metadata.put("userId", document.getUserId());
+                    metadata.put("userId", userId);
                     metadata.put("title", document.getTitle());
                     metadata.put("type", document.getType());
                     metadata.put("timestamp", System.currentTimeMillis());

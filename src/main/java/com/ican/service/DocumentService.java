@@ -54,8 +54,9 @@ public interface DocumentService {
      * 
      * @param documentId 文档ID
      * @param content 文档内容
+     * @param userId 用户ID
      */
-    void vectorizeAndStore(Long documentId, String content);
+    void vectorizeAndStore(Long documentId, String content, Long userId);
     
     /**
      * 检索相关文档

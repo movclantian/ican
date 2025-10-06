@@ -9,6 +9,7 @@ import com.ican.model.vo.LoginVO;
 import com.ican.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
@@ -45,13 +46,14 @@ public class AuthController {
      * 用户登录
      *
      * @param loginRequest 登录请求
+     * @param request HTTP请求对象
      * @return 登录返回信息
      */
     @SaIgnore
     @PostMapping("/login")
     @Operation(summary = "用户登录", description = "用户通过用户名和密码进行登录")
-    public LoginVO login(@Valid @RequestBody LoginRequest loginRequest) {
-        return authService.login(loginRequest);
+    public LoginVO login(@Valid @RequestBody LoginRequest loginRequest, HttpServletRequest request) {
+        return authService.login(loginRequest, request);
     }
 
     /**

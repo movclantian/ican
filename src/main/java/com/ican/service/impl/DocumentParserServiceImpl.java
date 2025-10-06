@@ -36,7 +36,13 @@ public class DocumentParserServiceImpl implements DocumentParserService {
             throw new BusinessException("文件名不能为空");
         }
         
-        String extension = filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
+        // 检查是否有扩展名
+        int lastDotIndex = filename.lastIndexOf(".");
+        if (lastDotIndex == -1 || lastDotIndex == filename.length() - 1) {
+            throw new BusinessException("文件缺少扩展名");
+        }
+        
+        String extension = filename.substring(lastDotIndex + 1).toLowerCase();
         
         return switch (extension) {
             case "pdf" -> parsePDF(file);
@@ -52,20 +58,20 @@ public class DocumentParserServiceImpl implements DocumentParserService {
         try {
             log.info("开始解析PDF: {}", file.getOriginalFilename());
             
-            PDDocument document = Loader.loadPDF(file.getBytes());
-            PDFTextStripper stripper = new PDFTextStripper();
-            
-            // 设置排序
-            stripper.setSortByPosition(true);
-            
-            String text = stripper.getText(document);
-            document.close();
-            
-            // 清理文本
-            text = cleanText(text);
-            
-            log.info("PDF解析完成: {}, 字符数={}", file.getOriginalFilename(), text.length());
-            return text;
+            try (PDDocument document = Loader.loadPDF(file.getBytes())) {
+                PDFTextStripper stripper = new PDFTextStripper();
+                
+                // 设置排序
+                stripper.setSortByPosition(true);
+                
+                String text = stripper.getText(document);
+                
+                // 清理文本
+                text = cleanText(text);
+                
+                log.info("PDF解析完成: {}, 字符数={}", file.getOriginalFilename(), text.length());
+                return text;
+            }
         } catch (Exception e) {
             log.error("PDF解析失败: {}", file.getOriginalFilename(), e);
             throw new BusinessException("PDF解析失败: " + e.getMessage());
@@ -77,23 +83,22 @@ public class DocumentParserServiceImpl implements DocumentParserService {
         try {
             log.info("开始解析Word: {}", file.getOriginalFilename());
             
-            XWPFDocument document = new XWPFDocument(file.getInputStream());
-            StringBuilder text = new StringBuilder();
-            
-            // 提取所有段落
-            for (XWPFParagraph paragraph : document.getParagraphs()) {
-                String paragraphText = paragraph.getText();
-                if (paragraphText != null && !paragraphText.trim().isEmpty()) {
-                    text.append(paragraphText).append("\n");
+            try (XWPFDocument document = new XWPFDocument(file.getInputStream())) {
+                StringBuilder text = new StringBuilder();
+                
+                // 提取所有段落
+                for (XWPFParagraph paragraph : document.getParagraphs()) {
+                    String paragraphText = paragraph.getText();
+                    if (paragraphText != null && !paragraphText.trim().isEmpty()) {
+                        text.append(paragraphText).append("\n");
+                    }
                 }
+                
+                String result = cleanText(text.toString());
+                
+                log.info("Word解析完成: {}, 字符数={}", file.getOriginalFilename(), result.length());
+                return result;
             }
-            
-            document.close();
-            
-            String result = cleanText(text.toString());
-            
-            log.info("Word解析完成: {}, 字符数={}", file.getOriginalFilename(), result.length());
-            return result;
         } catch (Exception e) {
             log.error("Word解析失败: {}", file.getOriginalFilename(), e);
             throw new BusinessException("Word解析失败: " + e.getMessage());
@@ -106,15 +111,14 @@ public class DocumentParserServiceImpl implements DocumentParserService {
             log.info("开始解析Markdown: {}", file.getOriginalFilename());
             
             StringBuilder text = new StringBuilder();
-            BufferedReader reader = new BufferedReader(
+            try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8)
-            );
-            
-            String line;
-            while ((line = reader.readLine()) != null) {
-                text.append(line).append("\n");
+            )) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    text.append(line).append("\n");
+                }
             }
-            reader.close();
             
             String result = text.toString();
             
@@ -132,15 +136,14 @@ public class DocumentParserServiceImpl implements DocumentParserService {
             log.info("开始解析文本: {}", file.getOriginalFilename());
             
             StringBuilder text = new StringBuilder();
-            BufferedReader reader = new BufferedReader(
+            try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8)
-            );
-            
-            String line;
-            while ((line = reader.readLine()) != null) {
-                text.append(line).append("\n");
+            )) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    text.append(line).append("\n");
+                }
             }
-            reader.close();
             
             String result = text.toString();
             
@@ -164,14 +167,17 @@ public class DocumentParserServiceImpl implements DocumentParserService {
         }
         
         return text
-            // 移除多余的空行
+            // 移除特殊控制字符（保留换行符和制表符）
+            .replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", "")
+            // 移除多余的空行（保留最多两个连续换行）
             .replaceAll("\\n{3,}", "\n\n")
-            // 移除行首行尾空格
-            .replaceAll("(?m)^\\s+|\\s+$", "")
-            // 标准化空格
-            .replaceAll(" {2,}", " ")
-            // 移除特殊控制字符
-            .replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]", "")
+            // 移除行首行尾空格和制表符
+            .replaceAll("(?m)^[\\s\\t]+|[\\s\\t]+$", "")
+            // 标准化多个空格为单个空格
+            .replaceAll("[\\s\\t]{2,}", " ")
+            // 移除多余的制表符
+            .replaceAll("\\t+", " ")
+            // 最终trim
             .trim();
     }
     

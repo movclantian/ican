@@ -45,7 +45,7 @@ public class DocumentProcessingConsumer {
             
             // 解析并向量化
             String content = documentService.parseDocument(message.getDocumentId());
-            documentService.vectorizeAndStore(message.getDocumentId(), content);
+            documentService.vectorizeAndStore(message.getDocumentId(), content, document.getUserId());
             
             // 更新状态为完成
             document.setStatus("completed");

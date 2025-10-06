@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import top.continew.starter.captcha.graphic.core.GraphicCaptchaService;
 import top.continew.starter.core.exception.BusinessException;
 
+import jakarta.servlet.http.HttpServletRequest;
 import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
 
@@ -55,6 +56,78 @@ public class AuthServiceImpl implements AuthService {
     @Value("${captcha.expire-minutes:5}")
     private long captchaExpireMinutes;
 
+    /**
+     * 获取客户端真实IP地址
+     *
+     * @param request HttpServletRequest
+     * @return IP地址
+     */
+    private String getClientRealIp(HttpServletRequest request) {
+        if (request == null) {
+            return "unknown";
+        }
+
+        String ip = request.getHeader("X-Forwarded-For");
+        if (StrUtil.isNotBlank(ip) && !"unknown".equalsIgnoreCase(ip)) {
+            // 多次反向代理后会有多个IP值，第一个为真实IP
+            int index = ip.indexOf(',');
+            if (index != -1) {
+                ip = ip.substring(0, index).trim();
+            }
+            // 验证IP格式
+            if (isValidIp(ip)) {
+                return ip;
+            }
+        }
+
+        ip = request.getHeader("X-Real-IP");
+        if (StrUtil.isNotBlank(ip) && !"unknown".equalsIgnoreCase(ip) && isValidIp(ip)) {
+            return ip;
+        }
+
+        ip = request.getHeader("Proxy-Client-IP");
+        if (StrUtil.isNotBlank(ip) && !"unknown".equalsIgnoreCase(ip) && isValidIp(ip)) {
+            return ip;
+        }
+
+        ip = request.getHeader("WL-Proxy-Client-IP");
+        if (StrUtil.isNotBlank(ip) && !"unknown".equalsIgnoreCase(ip) && isValidIp(ip)) {
+            return ip;
+        }
+
+        ip = request.getHeader("HTTP_CLIENT_IP");
+        if (StrUtil.isNotBlank(ip) && !"unknown".equalsIgnoreCase(ip) && isValidIp(ip)) {
+            return ip;
+        }
+
+        ip = request.getHeader("HTTP_X_FORWARDED_FOR");
+        if (StrUtil.isNotBlank(ip) && !"unknown".equalsIgnoreCase(ip) && isValidIp(ip)) {
+            return ip;
+        }
+
+        // 如果以上都没有获取到，则使用request.getRemoteAddr()
+        ip = request.getRemoteAddr();
+        
+        // 本地访问
+        if ("127.0.0.1".equals(ip) || "0:0:0:0:0:0:0:1".equals(ip)) {
+            return "127.0.0.1";
+        }
+        
+        return ip != null ? ip : "unknown";
+    }
+
+    /**
+     * 验证IP地址格式
+     */
+    private boolean isValidIp(String ip) {
+        if (StrUtil.isBlank(ip)) {
+            return false;
+        }
+        // 简单的IP格式验证
+        return ip.matches("^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$") ||
+               ip.matches("^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$");
+    }
+
     @Override
     public CaptchaVO getCaptcha() {
         // 1. 生成验证码
@@ -82,7 +155,7 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public LoginVO login(LoginRequest loginRequest) {
+    public LoginVO login(LoginRequest loginRequest, HttpServletRequest request) {
         // 1. 参数校验
         if (StrUtil.isBlank(loginRequest.getUsername()) || StrUtil.isBlank(loginRequest.getPassword())) {
             throw new BusinessException("用户名或密码不能为空");
@@ -121,8 +194,7 @@ public class AuthServiceImpl implements AuthService {
 
         // 7. 更新最后登录信息
         user.setLastLoginTime(LocalDateTime.now());
-        // TODO: 获取真实IP
-        // user.setLastLoginIp(ServletUtil.getClientIP(request));
+        user.setLastLoginIp(getClientRealIp(request));
         userMapper.updateById(user);
 
         // 8. 获取 Token 信息

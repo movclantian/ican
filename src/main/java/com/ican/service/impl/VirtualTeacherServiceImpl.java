@@ -1,5 +1,6 @@
 package com.ican.service.impl;
 
+import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.util.StrUtil;
 import com.ican.service.VirtualTeacherService;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,7 @@ import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import top.continew.starter.core.exception.BusinessException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,6 +36,11 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
     @Override
     public String chat(String conversationId, String query, String role) {
         log.info("虚拟教师对话: conversationId={}, role={}, query={}", conversationId, query, role);
+        
+        // 验证参数（拦截器已确保用户已登录）
+        if (StrUtil.isBlank(query)) {
+            throw new BusinessException("查询内容不能为空");
+        }
         
         // 获取对话历史
         List<Message> history = chatMemoryRepository.findByConversationId(conversationId);
@@ -83,6 +90,16 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
         SseEmitter emitter = new SseEmitter(300000L);
         
         log.info("虚拟教师流式对话: conversationId={}, role={}", conversationId, role);
+        
+        // 验证参数（拦截器已确保用户已登录）
+        if (StrUtil.isBlank(query)) {
+            try {
+                emitter.completeWithError(new BusinessException("查询内容不能为空"));
+            } catch (Exception e) {
+                log.error("发送错误响应失败", e);
+            }
+            return emitter;
+        }
         
         // 获取对话历史
         List<Message> history = chatMemoryRepository.findByConversationId(conversationId);
@@ -146,7 +163,11 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
             })
             .doOnError(error -> {
                 log.error("虚拟教师流式对话错误", error);
-                emitter.completeWithError(error);
+                try {
+                    emitter.completeWithError(error);
+                } catch (Exception e) {
+                    log.error("发送错误响应失败", e);
+                }
             })
             .subscribe();
         
@@ -156,6 +177,14 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
     @Override
     public List<String> recommendContent(Long userId, String subject) {
         log.info("推荐学习内容: userId={}, subject={}", userId, subject);
+        
+        // 验证参数（拦截器已确保用户已登录）
+        if (userId == null) {
+            throw new BusinessException("用户ID不能为空");
+        }
+        if (StrUtil.isBlank(subject)) {
+            throw new BusinessException("学科不能为空");
+        }
         
         String prompt = String.format("""
             请为学习 %s 的用户推荐5个值得深入学习的主题或前沿技术。
@@ -183,6 +212,14 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
     @Override
     public String gradeAssignment(String assignment, String subject) {
         log.info("批改作业: subject={}, assignmentLength={}", subject, assignment.length());
+        
+        // 验证参数（拦截器已确保用户已登录）
+        if (StrUtil.isBlank(assignment)) {
+            throw new BusinessException("作业内容不能为空");
+        }
+        if (StrUtil.isBlank(subject)) {
+            throw new BusinessException("学科不能为空");
+        }
         
         String prompt = String.format("""
             你是一位专业的 %s 教师,请批改以下作业:

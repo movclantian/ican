@@ -4,6 +4,7 @@ import com.ican.model.dto.LoginRequest;
 import com.ican.model.dto.RegisterRequest;
 import com.ican.model.vo.CaptchaVO;
 import com.ican.model.vo.LoginVO;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * 认证服务接口
@@ -24,9 +25,10 @@ public interface AuthService {
      * 用户登录
      *
      * @param loginRequest 登录请求
+     * @param request HTTP请求对象，用于获取客户端IP
      * @return 登录返回信息
      */
-    LoginVO login(LoginRequest loginRequest);
+    LoginVO login(LoginRequest loginRequest, HttpServletRequest request);
 
     /**
      * 用户注册
