@@ -36,7 +36,7 @@ spring:
     redis:
       host: localhost
       port: 6379
-      #password: 
+#      password:
       database: 0
       timeout: 10s
       lettuce:
@@ -287,6 +287,62 @@ chat:
   # 是否记录 Token 使用情况
   log-token-usage: true
 
+--- ### 文件存储配置
+file:
+  storage:
+    # 本地存储基础路径
+    base-path: ./uploads
+    # 后续可替换为 MinIO 配置
+
+--- ### RAG 配置
+rag:
+  # 向量检索配置
+  retrieval:
+    # 默认检索文档数量
+    top-k: 5
+    # 相似度阈值
+    similarity-threshold: 0.7
+    # 是否启用重排序
+    enable-reranking: false
+    # 是否启用混合检索(向量+全文)
+    enable-hybrid-search: false
+  
+  # 文档处理配置
+  document:
+    # 文档分块大小(token)
+    chunk-size: 500
+    # 块间重叠(token)
+    chunk-overlap: 100
+    # 最小分块字符数
+    min-chunk-size-chars: 5
+    # 最大分块字符数
+    max-chunk-size-chars: 1000
+    # 是否保留分隔符
+    keep-separator: true
+    # 支持的文件类型
+    allowed-types: pdf,docx,md,txt
+    # 单个文件最大大小(MB)
+    max-file-size: 50
+  
+  # 嵌入模型配置
+  embedding:
+    # 模型名称
+    model: text-embedding-ada-002
+    # 批量处理大小
+    batch-size: 100
+    # 维度
+    dimension: 1536
+  
+  # 混合搜索配置
+  hybrid-search:
+    # 向量搜索数量
+    vector-top-k: 20
+    # 向量相似度阈值
+    vector-similarity-threshold: 0.5
+    # 向量搜索权重
+    vector-weight: 0.6
+    # 全文搜索权重
+    text-weight: 0.4
 spring.ai:
   ## Retry 配置 - 用于处理超时和重试机制
   retry:
@@ -301,6 +357,12 @@ spring.ai:
       max-interval: 10000
     # 是否对客户端错误(4xx)进行重试
     on-client-errors: false
+  ## Vector Store 配置
+  vectorstore:
+    redis:
+      initialize-schema: true
+      index-name: vector-index
+      prefix: "vector:"
   openai:
     api-key: sk-024fe9ab6fcd4cc68232b340ac141cbf
     base-url: https://api.deepseek.com

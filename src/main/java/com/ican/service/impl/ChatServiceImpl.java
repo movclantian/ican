@@ -5,8 +5,11 @@ import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.ican.config.ChatConfig;
+import com.ican.config.RAGConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.repository.jdbc.JdbcChatMemoryRepository;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -16,6 +19,9 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -48,6 +54,8 @@ public class ChatServiceImpl implements ChatService {
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final ChatConfig chatConfig;
+    private final VectorStore vectorStore;
+    private final RAGConfig ragConfig;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -69,19 +77,54 @@ public class ChatServiceImpl implements ChatService {
         // 检查是否是该会话的第一条消息（用于判断是否需要生成标题）
         boolean shouldGenerateTitle = shouldGenerateTitle(conversationId);
 
+        String aiText;
+        
+        // 根据是否启用RAG选择不同的对话方式
+        if (Boolean.TRUE.equals(request.getEnableRag())) {
+            log.info("使用RAG增强对话: conversationId={}, topK={}", conversationId, request.getRagTopK());
+            aiText = chatWithRag(conversationId, request.getMessage(), request.getRagTopK(), currentUserId);
+        } else {
+            // 原有的普通对话逻辑
+            aiText = chatNormal(conversationId, request.getMessage());
+        }
+
+        // 保存对话消息
+        saveChatMessage(conversationId, "USER", request.getMessage());
+        saveChatMessage(conversationId, "ASSISTANT", aiText);
+
+        // 如果是该会话的第一条消息,生成会话标题
+        if (shouldGenerateTitle) {
+            if (chatConfig.getAsyncTitleGeneration()) {
+                generateSessionTitleAsync(conversationId, request.getMessage());
+            } else {
+                generateAndUpdateSessionTitle(conversationId, request.getMessage());
+            }
+        }
+
+        return ChatResponseVO.builder()
+            .conversationId(conversationId)
+            .userMessage(request.getMessage())
+            .aiResponse(aiText)
+            .timestamp(LocalDateTime.now())
+            .build();
+    }
+
+    /**
+     * 普通对话（无RAG）
+     */
+    private String chatNormal(String conversationId, String userMessage) {
         // 构建消息列表
         List<Message> messages = new ArrayList<>();
 
-        // 获取历史对话记录 (优先从 ChatMemoryRepository,如果为空则从数据库恢复)
+        // 获取历史对话记录
         List<Message> history = getConversationHistory(conversationId);
         if (history != null && !history.isEmpty()) {
-            // 限制历史消息数量,防止 Token 超限
             messages.addAll(limitHistoryMessages(history));
         }
 
         // 添加用户当前消息
-        UserMessage userMessage = new UserMessage(request.getMessage());
-        messages.add(userMessage);
+        UserMessage userMsg = new UserMessage(userMessage);
+        messages.add(userMsg);
 
         // 构建 Prompt,使用配置的参数
         Prompt prompt = createPrompt(messages);
@@ -101,39 +144,85 @@ public class ChatServiceImpl implements ChatService {
             throw new BusinessException("AI 响应为空,请重新提问");
         }
 
-        // 1. 先保存到业务数据库(在事务内,可回滚)
-        saveChatMessage(conversationId, "USER", request.getMessage());
-        saveChatMessage(conversationId, "ASSISTANT", assistantMessage.getText());
-        
-        // 2. 再保存到 ChatMemoryRepository (用于 AI 上下文)
-        // 注意: ChatMemoryRepository 有独立的事务,如果这里失败不会影响业务数据
+        // 保存到 ChatMemoryRepository (用于 AI 上下文)
         try {
-            chatMemoryRepository.saveAll(conversationId, List.of(userMessage, assistantMessage));
+            chatMemoryRepository.saveAll(conversationId, List.of(userMsg, assistantMessage));
         } catch (Exception e) {
-            log.error("保存到ChatMemoryRepository失败,但业务数据已保存: conversationId={}", conversationId, e);
-            // 不抛出异常,允许业务流程继续(下次对话会从数据库重建上下文)
+            log.error("保存到ChatMemoryRepository失败: conversationId={}", conversationId, e);
         }
 
-        // 记录 Token 使用情况
-        if (chatConfig.getLogTokenUsage()) {
-            logTokenUsage(conversationId, chatResponse);
-        }
+        return aiText;
+    }
 
-        // 如果是该会话的第一条消息,生成会话标题
-        if (shouldGenerateTitle) {
-            if (chatConfig.getAsyncTitleGeneration()) {
-                generateSessionTitleAsync(conversationId, request.getMessage());
-            } else {
-                generateAndUpdateSessionTitle(conversationId, request.getMessage());
-            }
-        }
-
-        return ChatResponseVO.builder()
-            .conversationId(conversationId)
-            .userMessage(request.getMessage())
-            .aiResponse(assistantMessage.getText())
-            .timestamp(LocalDateTime.now())
+    /**
+     * RAG增强对话
+     */
+    private String chatWithRag(String conversationId, String userMessage, Integer topK, Long userId) {
+        // 使用配置的topK或传入的topK
+        int ragTopK = topK != null ? topK : ragConfig.getRetrieval().getTopK();
+        
+        // 构建用户过滤表达式,只检索该用户的文档
+        var filterExpression = new FilterExpressionBuilder().eq("userId", userId).build();
+        
+        // 构建 SearchRequest
+        SearchRequest searchRequest = SearchRequest.builder()
+            .query(userMessage)  // 使用用户问题作为查询
+            .topK(ragTopK)
+            .similarityThreshold(ragConfig.getRetrieval().getSimilarityThreshold())
+            .filterExpression(filterExpression)
             .build();
+        
+        // 使用 QuestionAnswerAdvisor 自动处理 RAG
+        QuestionAnswerAdvisor qaAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
+            .searchRequest(searchRequest)
+            .build();
+        
+        // 获取历史对话
+        List<Message> history = getConversationHistory(conversationId);
+        List<Message> limitedHistory = (history != null && !history.isEmpty()) 
+            ? limitHistoryMessages(history) 
+            : new ArrayList<>();
+        
+        // 构建系统提示
+        String systemPrompt = "你是一个智能助手。请基于提供的参考文档回答用户问题。" +
+            "如果参考文档中没有相关信息,请基于你的知识回答,并说明这不是来自文档。";
+        
+        // 使用 ChatClient 进行 RAG 对话
+        ChatClient chatClient = ChatClient.builder(openAiChatModel)
+            .defaultAdvisors(qaAdvisor)  // QuestionAnswerAdvisor 会自动检索文档并增强提示
+            .defaultSystem(systemPrompt)
+            .defaultOptions(OpenAiChatOptions.builder()
+                .temperature(chatConfig.getTemperature())
+                .maxTokens(chatConfig.getMaxTokens())
+                .build())
+            .build();
+        
+        // 构建包含历史对话的消息列表
+        List<Message> messages = new ArrayList<>();
+        messages.addAll(limitedHistory);
+        messages.add(new UserMessage(userMessage));
+        
+        // 执行 RAG 对话
+        String response = chatClient.prompt()
+            .messages(messages)
+            .call()
+            .content();
+        
+        if (response == null || response.isEmpty()) {
+            throw new BusinessException("RAG对话响应为空,请重新提问");
+        }
+        
+        // 保存到记忆库(保存原始用户消息)
+        try {
+            UserMessage userMsg = new UserMessage(userMessage);
+            AssistantMessage assistantMessage = new AssistantMessage(response);
+            chatMemoryRepository.saveAll(conversationId, List.of(userMsg, assistantMessage));
+        } catch (Exception e) {
+            log.error("保存RAG对话到ChatMemoryRepository失败: conversationId={}", conversationId, e);
+        }
+        
+        log.info("RAG对话完成: conversationId={}, responseLength={}", conversationId, response.length());
+        return response;
     }
 
     @Override
@@ -156,7 +245,22 @@ public class ChatServiceImpl implements ChatService {
 
         // 检查是否是该会话的第一条消息（用于判断是否需要生成标题）
         final boolean shouldGenerateTitle = shouldGenerateTitle(conversationId);
+        final String finalConversationId = conversationId;
 
+        // 根据是否启用RAG选择不同的流式对话方式
+        if (Boolean.TRUE.equals(request.getEnableRag())) {
+            log.info("使用RAG增强流式对话: conversationId={}, topK={}", conversationId, request.getRagTopK());
+            return chatStreamWithRag(emitter, finalConversationId, request, currentUserId, shouldGenerateTitle);
+        } else {
+            return chatStreamNormal(emitter, finalConversationId, request, shouldGenerateTitle);
+        }
+    }
+
+    /**
+     * 普通流式对话（无RAG）
+     */
+    private SseEmitter chatStreamNormal(SseEmitter emitter, String conversationId, 
+                                        ChatRequestDTO request, boolean shouldGenerateTitle) {
         // 构建消息列表
         List<Message> messages = new ArrayList<>();
 
@@ -173,8 +277,6 @@ public class ChatServiceImpl implements ChatService {
 
         // 构建 Prompt,使用配置的参数(流式)
         Prompt prompt = createPrompt(messages);
-        
-        final String finalConversationId = conversationId;
         
         // 用于累积完整的AI响应
         StringBuilder fullResponse = new StringBuilder();
@@ -201,7 +303,7 @@ public class ChatServiceImpl implements ChatService {
                         emitter.send(SseEmitter.event().data(content));
                     }
                 } catch (Exception e) {
-                    log.error("发送SSE数据失败: conversationId={}", finalConversationId, e);
+                    log.error("发送SSE数据失败: conversationId={}", conversationId, e);
                     emitter.completeWithError(e);
                 }
             })
@@ -212,7 +314,7 @@ public class ChatServiceImpl implements ChatService {
                     
                     // 检查 AI 响应是否为空
                     if (aiResponse.isEmpty()) {
-                        log.warn("流式对话响应为空: conversationId={}", finalConversationId);
+                        log.warn("流式对话响应为空: conversationId={}", conversationId);
                         emitter.complete();
                         return;
                     }
@@ -220,44 +322,173 @@ public class ChatServiceImpl implements ChatService {
                     AssistantMessage assistantMessage = new AssistantMessage(aiResponse);
                     
                     // 1. 先保存到业务数据库
-                    saveChatMessage(finalConversationId, "USER", request.getMessage());
-                    saveChatMessage(finalConversationId, "ASSISTANT", aiResponse);
+                    saveChatMessage(conversationId, "USER", request.getMessage());
+                    saveChatMessage(conversationId, "ASSISTANT", aiResponse);
                     
                     messageSaved[0] = true;
                     
                     // 2. 再保存到 ChatMemoryRepository (用于 AI 上下文)
                     try {
-                        chatMemoryRepository.saveAll(finalConversationId, List.of(userMessage, assistantMessage));
+                        chatMemoryRepository.saveAll(conversationId, List.of(userMessage, assistantMessage));
                     } catch (Exception e) {
-                        log.error("流式对话-保存到ChatMemoryRepository失败: conversationId={}", finalConversationId, e);
+                        log.error("流式对话-保存到ChatMemoryRepository失败: conversationId={}", conversationId, e);
                         // 不影响主流程,下次对话会从数据库重建上下文
                     }
                     
                     // 如果是该会话的第一条消息,生成标题
                     if (shouldGenerateTitle) {
                         if (chatConfig.getAsyncTitleGeneration()) {
-                            generateSessionTitleAsync(finalConversationId, request.getMessage());
+                            generateSessionTitleAsync(conversationId, request.getMessage());
                         } else {
-                            generateAndUpdateSessionTitle(finalConversationId, request.getMessage());
+                            generateAndUpdateSessionTitle(conversationId, request.getMessage());
                         }
                     }
                     
                     log.info("流式对话完成: conversationId={}, messageLength={}", 
-                        finalConversationId, aiResponse.length());
+                        conversationId, aiResponse.length());
                     emitter.complete();
                 } catch (Exception e) {
-                    log.error("完成SSE传输失败: conversationId={}", finalConversationId, e);
+                    log.error("完成SSE传输失败: conversationId={}", conversationId, e);
                     emitter.completeWithError(e);
                 }
             })
             .doOnError(error -> {
                 log.error("流式对话出错: conversationId={}, error={}", 
-                    finalConversationId, error.getMessage(), error);
+                    conversationId, error.getMessage(), error);
                 
                 // 如果消息尚未保存且有部分响应,记录错误但不保存
                 if (!messageSaved[0] && fullResponse.length() > 0) {
                     log.warn("流式对话异常中断,已生成部分内容未保存: conversationId={}, partialLength={}", 
-                        finalConversationId, fullResponse.length());
+                        conversationId, fullResponse.length());
+                }
+                
+                emitter.completeWithError(error);
+            })
+            .subscribe();
+        
+        return emitter;
+    }
+
+    /**
+     * RAG增强流式对话
+     */
+    private SseEmitter chatStreamWithRag(SseEmitter emitter, String conversationId, 
+                                         ChatRequestDTO request, Long userId, boolean shouldGenerateTitle) {
+        // 使用配置的topK或传入的topK
+        int ragTopK = request.getRagTopK() != null ? request.getRagTopK() : ragConfig.getRetrieval().getTopK();
+        
+        // 构建用户过滤表达式,只检索该用户的文档
+        var filterExpression = new FilterExpressionBuilder().eq("userId", userId).build();
+        
+        // 构建 SearchRequest
+        SearchRequest searchRequest = SearchRequest.builder()
+            .query(request.getMessage())
+            .topK(ragTopK)
+            .similarityThreshold(ragConfig.getRetrieval().getSimilarityThreshold())
+            .filterExpression(filterExpression)
+            .build();
+        
+        // 使用 QuestionAnswerAdvisor 自动处理 RAG
+        QuestionAnswerAdvisor qaAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
+            .searchRequest(searchRequest)
+            .build();
+        
+        // 获取历史对话
+        List<Message> history = getConversationHistory(conversationId);
+        List<Message> limitedHistory = (history != null && !history.isEmpty()) 
+            ? limitHistoryMessages(history) 
+            : new ArrayList<>();
+        
+        // 构建系统提示
+        String systemPrompt = "你是一个智能助手。请基于提供的参考文档回答用户问题。" +
+            "如果参考文档中没有相关信息,请基于你的知识回答,并说明这不是来自文档。";
+        
+        // 使用 ChatClient 进行 RAG 流式对话
+        ChatClient chatClient = ChatClient.builder(openAiChatModel)
+            .defaultAdvisors(qaAdvisor)
+            .defaultSystem(systemPrompt)
+            .defaultOptions(OpenAiChatOptions.builder()
+                .temperature(chatConfig.getTemperature())
+                .maxTokens(chatConfig.getMaxTokens())
+                .build())
+            .build();
+        
+        // 构建包含历史对话的消息列表
+        List<Message> messages = new ArrayList<>();
+        messages.addAll(limitedHistory);
+        messages.add(new UserMessage(request.getMessage()));
+        
+        // 用于累积完整的AI响应
+        StringBuilder fullResponse = new StringBuilder();
+        
+        // 标记是否已保存消息
+        final boolean[] messageSaved = {false};
+        
+        // 执行 RAG 流式对话
+        chatClient.prompt()
+            .messages(messages)
+            .stream()
+            .content()
+            .doOnNext(content -> {
+                try {
+                    if (content != null && !content.isEmpty()) {
+                        fullResponse.append(content);
+                        emitter.send(SseEmitter.event().data(content));
+                    }
+                } catch (Exception e) {
+                    log.error("RAG流式-发送SSE数据失败: conversationId={}", conversationId, e);
+                    emitter.completeWithError(e);
+                }
+            })
+            .doOnComplete(() -> {
+                try {
+                    String aiResponse = fullResponse.toString();
+                    
+                    if (aiResponse.isEmpty()) {
+                        log.warn("RAG流式对话响应为空: conversationId={}", conversationId);
+                        emitter.complete();
+                        return;
+                    }
+                    
+                    // 保存到业务数据库
+                    saveChatMessage(conversationId, "USER", request.getMessage());
+                    saveChatMessage(conversationId, "ASSISTANT", aiResponse);
+                    
+                    messageSaved[0] = true;
+                    
+                    // 保存到 ChatMemoryRepository
+                    try {
+                        UserMessage userMsg = new UserMessage(request.getMessage());
+                        AssistantMessage assistantMessage = new AssistantMessage(aiResponse);
+                        chatMemoryRepository.saveAll(conversationId, List.of(userMsg, assistantMessage));
+                    } catch (Exception e) {
+                        log.error("RAG流式-保存到ChatMemoryRepository失败: conversationId={}", conversationId, e);
+                    }
+                    
+                    // 生成标题
+                    if (shouldGenerateTitle) {
+                        if (chatConfig.getAsyncTitleGeneration()) {
+                            generateSessionTitleAsync(conversationId, request.getMessage());
+                        } else {
+                            generateAndUpdateSessionTitle(conversationId, request.getMessage());
+                        }
+                    }
+                    
+                    log.info("RAG流式对话完成: conversationId={}, messageLength={}", 
+                        conversationId, aiResponse.length());
+                    emitter.complete();
+                } catch (Exception e) {
+                    log.error("RAG流式-完成SSE传输失败: conversationId={}", conversationId, e);
+                    emitter.completeWithError(e);
+                }
+            })
+            .doOnError(error -> {
+                log.error("RAG流式对话出错: conversationId={}, error={}", 
+                    conversationId, error.getMessage(), error);
+                
+                if (!messageSaved[0] && fullResponse.length() > 0) {
+                    log.warn("RAG流式对话异常中断,已生成部分内容未保存: conversationId={}, partialLength={}", 
+                        conversationId, fullResponse.length());
                 }
                 
                 emitter.completeWithError(error);
@@ -611,33 +842,6 @@ public class ChatServiceImpl implements ChatService {
         return limitedHistory;
     }
     
-    /**
-     * 记录 Token 使用情况
-     * 
-     * @param conversationId 会话ID
-     * @param chatResponse AI 响应
-     */
-    private void logTokenUsage(String conversationId, ChatResponse chatResponse) {
-        try {
-            if (chatResponse.getMetadata() != null && 
-                chatResponse.getMetadata().getUsage() != null) {
-                
-                Integer promptTokens = chatResponse.getMetadata().getUsage().getPromptTokens();
-                Integer totalTokens = chatResponse.getMetadata().getUsage().getTotalTokens();
-                
-                // 计算生成的token数(总数 - 提示词token)
-                Integer generationTokens = (totalTokens != null && promptTokens != null) 
-                    ? totalTokens - promptTokens : null;
-                
-                log.info("Token使用统计: conversationId={}, promptTokens={}, generationTokens={}, totalTokens={}", 
-                    conversationId, promptTokens, generationTokens, totalTokens);
-                
-                // TODO: 可以保存到数据库用于成本统计和分析
-            }
-        } catch (Exception e) {
-            log.warn("记录Token使用失败: conversationId={}", conversationId, e);
-        }
-    }
     
     /**
      * 异步生成并更新会话标题

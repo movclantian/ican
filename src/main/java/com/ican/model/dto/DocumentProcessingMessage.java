@@ -1,0 +1,44 @@
+package com.ican.model.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.io.Serializable;
+
+/**
+ * 文档处理消息
+ * 
+ * @author ICan
+ * @since 2024-10-06
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class DocumentProcessingMessage implements Serializable {
+    
+    private static final long serialVersionUID = 1L;
+    
+    /**
+     * 文档ID
+     */
+    private Long documentId;
+    
+    /**
+     * 用户ID
+     */
+    private Long userId;
+    
+    /**
+     * 处理类型: parse, vectorize, index
+     */
+    private String processingType;
+    
+    /**
+     * 额外参数
+     */
+    private String metadata;
+}
+
