@@ -323,16 +323,7 @@ rag:
     allowed-types: pdf,docx,md,txt
     # 单个文件最大大小(MB)
     max-file-size: 50
-  
-  # 嵌入模型配置
-  embedding:
-    # 模型名称
-    model: text-embedding-ada-002
-    # 批量处理大小
-    batch-size: 100
-    # 维度
-    dimension: 1536
-  
+
   # 混合搜索配置
   hybrid-search:
     # 向量搜索数量
@@ -359,20 +350,39 @@ spring.ai:
     on-client-errors: false
   ## Vector Store 配置
   vectorstore:
-    redis:
-      initialize-schema: true
-      index-name: vector-index
-      prefix: "vector:"
+    # Redis 向量存储配置 - 已切换到 Pinecone
+    # redis:
+    #   initialize-schema: true
+    #   index-name: vector-index
+    #   prefix: "vector:"
+    
+    # Pinecone 向量存储配置
+    # 请设置以下环境变量：
+    # PINECONE_API_KEY: 您的 Pinecone API 密钥
+    # PINECONE_INDEX_NAME: Pinecone 索引名称
+    # PINECONE_NAMESPACE: Pinecone 命名空间（可选，默认为 default）
+    pinecone:
+#host:https://springai-gabnl4t.svc.aped-4627-b74a.pinecone.io
+      api-key: pcsk_5K7bum_LKCbyfM8gmPhxwhXCQjkdPbc5XkA3q1JZoZ5R6L33GdPW12smEDf84iBWRCpGdc
+      index-name: springai
+      project-id: gabnl4t
+      environment: aped-4627-b74a
+      distance-metadata-field-name: distance
+      server-side-timeout: 20s
   openai:
-    api-key: sk-024fe9ab6fcd4cc68232b340ac141cbf
-    base-url: https://api.deepseek.com
+    api-key: sk-361aaafb23fd40c7bc3d3f5d9f629d03
+    base-url: https://dashscope.aliyuncs.com/compatible-mode/
     chat:
       options:
-        model: deepseek-chat
+        model: qwen3-max-preview
         # 温度参数(0.0-2.0),控制响应的随机性
         temperature: 0.7
         # 最大生成token数,避免响应过长导致超时
         max-tokens: 2000
+    embedding:
+      options:
+        # 嵌入模型名称 - 使用阿里云通义千问的嵌入模型
+        model: text-embedding-v4
   ## Chat Memory 配置
   chat:
     memory:

@@ -204,8 +204,18 @@ public class DocumentServiceImpl implements DocumentService {
                 })
                 .toList();
             
-            // 3. 向量化并存储到 Redis
-            vectorStore.add(documents);
+            // 3. 向量化并存储 - 分批处理以符合阿里云嵌入模型的批量大小限制(最多10个)
+            int batchSize = 10; // 阿里云 text-embedding-v4 限制
+            int totalBatches = (int) Math.ceil((double) documents.size() / batchSize);
+            
+            for (int i = 0; i < documents.size(); i += batchSize) {
+                int end = Math.min(i + batchSize, documents.size());
+                List<Document> batch = documents.subList(i, end);
+                int currentBatch = (i / batchSize) + 1;
+                
+                log.info("向量化批次 {}/{}: 处理 {} 个文档块", currentBatch, totalBatches, batch.size());
+                vectorStore.add(batch);
+            }
             
             log.info("文档向量化完成: id={}, vectors={}", documentId, documents.size());
         } catch (Exception e) {

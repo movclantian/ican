@@ -2,6 +2,11 @@ package com.ican.service.impl;
 
 import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.ican.mapper.ChatMessageMapper;
+import com.ican.mapper.ChatSessionMapper;
+import com.ican.model.entity.ChatMessageDO;
+import com.ican.model.entity.ChatSessionDO;
 import com.ican.service.VirtualTeacherService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,8 +21,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import top.continew.starter.core.exception.BusinessException;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 虚拟教师服务实现
@@ -32,6 +40,8 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
     
     private final OpenAiChatModel openAiChatModel;
     private final JdbcChatMemoryRepository chatMemoryRepository;
+    private final ChatSessionMapper chatSessionMapper;
+    private final ChatMessageMapper chatMessageMapper;
     
     @Override
     public String chat(String conversationId, String query, String role) {
@@ -140,7 +150,18 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
             .doOnNext(content -> {
                 try {
                     if (!content.isEmpty()) {
-                        emitter.send(SseEmitter.event().data(content));
+                        // 按照 OpenAI 格式返回
+                        Map<String, Object> delta = new HashMap<>();
+                        delta.put("content", content);
+                        
+                        Map<String, Object> choice = new HashMap<>();
+                        choice.put("delta", delta);
+                        choice.put("index", 0);
+                        
+                        Map<String, Object> response = new HashMap<>();
+                        response.put("choices", List.of(choice));
+                        
+                        emitter.send(SseEmitter.event().data(response));
                     }
                 } catch (Exception e) {
                     log.error("发送虚拟教师SSE数据失败", e);
@@ -149,10 +170,14 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
             })
             .doOnComplete(() -> {
                 try {
-                    // 保存对话历史
+                    // 保存对话历史到内存
                     String aiResponse = fullResponse.toString();
                     AssistantMessage assistantMessage = new AssistantMessage(aiResponse);
                     chatMemoryRepository.saveAll(conversationId, List.of(userMessage, assistantMessage));
+                    
+                    // 保存到业务数据库
+                    saveChatMessage(conversationId, "USER", query);
+                    saveChatMessage(conversationId, "ASSISTANT", aiResponse);
                     
                     log.info("虚拟教师流式对话完成: conversationId={}", conversationId);
                     emitter.complete();
@@ -285,6 +310,31 @@ public class VirtualTeacherServiceImpl implements VirtualTeacherService {
                 请根据用户的问题提供准确、有帮助的回答。
                 """;
         };
+    }
+    
+    /**
+     * 保存聊天消息到数据库
+     */
+    private void saveChatMessage(String conversationId, String role, String content) {
+        try {
+            ChatSessionDO session = chatSessionMapper.selectOne(new LambdaQueryWrapper<ChatSessionDO>()
+                .eq(ChatSessionDO::getConversationId, conversationId));
+
+            if (session != null) {
+                ChatMessageDO message = new ChatMessageDO();
+                message.setSessionId(session.getId());
+                message.setRole(role);
+                message.setContent(content);
+                message.setCreateTime(LocalDateTime.now());
+
+                chatMessageMapper.insert(message);
+                log.debug("保存虚拟教师消息到数据库: conversationId={}, role={}", conversationId, role);
+            } else {
+                log.warn("会话不存在,无法保存消息: conversationId={}", conversationId);
+            }
+        } catch (Exception e) {
+            log.error("保存虚拟教师消息到数据库失败: conversationId={}", conversationId, e);
+        }
     }
 }
 

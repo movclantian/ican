@@ -1,16 +1,14 @@
 package com.ican.config;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.embedding.EmbeddingModel;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.ai.vectorstore.redis.RedisVectorStore;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import redis.clients.jedis.JedisPooled;
 
 /**
  * 向量存储配置类
+ * 
+ * 注意：由于Spring AI Pinecone自动配置已经提供了VectorStore Bean，
+ * 我们不再需要手动配置。Pinecone配置通过application.yaml中的
+ * spring.ai.vectorstore.pinecone.* 属性进行配置。
  *
  * @author ICan
  * @since 2024-10-07
@@ -18,7 +16,12 @@ import redis.clients.jedis.JedisPooled;
 @Slf4j
 @Configuration
 public class VectorStoreConfig {
-
+    
+    // Spring AI Pinecone 自动配置已提供 VectorStore Bean
+    // 配置通过 application.yaml 中的 spring.ai.vectorstore.pinecone.* 属性进行
+    
+    // Redis 向量存储配置 - 已切换到 Pinecone
+    /*
     @Value("${spring.data.redis.host:localhost}")
     private String redisHost;
 
@@ -31,24 +34,12 @@ public class VectorStoreConfig {
     @Value("${spring.ai.vectorstore.redis.prefix:vector:}")
     private String prefix;
 
-    /**
-     * 配置 JedisPooled
-     *
-     * @return JedisPooled实例
-     */
     @Bean
     public JedisPooled jedisPooled() {
         log.info("初始化 Redis 连接: {}:{}", redisHost, redisPort);
         return new JedisPooled(redisHost, redisPort);
     }
 
-    /**
-     * 配置 Redis 向量存储
-     *
-     * @param embeddingModel 嵌入模型
-     * @param jedisPooled Jedis连接池
-     * @return Redis向量存储实例
-     */
     @Bean
     public VectorStore vectorStore(EmbeddingModel embeddingModel, JedisPooled jedisPooled) {
         log.info("初始化 Redis 向量存储...");
@@ -58,7 +49,8 @@ public class VectorStoreConfig {
         return RedisVectorStore.builder(jedisPooled, embeddingModel)
             .indexName(indexName)
             .prefix(prefix)
-            .initializeSchema(false)  // 禁用自动初始化，需要Redis Stack支持
+            .initializeSchema(false)
             .build();
     }
+    */
 }

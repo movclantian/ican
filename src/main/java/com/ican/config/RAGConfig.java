@@ -110,7 +110,7 @@ public class RAGConfig {
         /**
          * 模型名称
          */
-        private String model = "text-embedding-ada-002";
+        private String model = "text-embedding-v4";
         
         /**
          * 批量处理大小

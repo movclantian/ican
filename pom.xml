@@ -117,9 +117,17 @@
 			<artifactId>spring-ai-starter-model-chat-memory-repository-jdbc</artifactId>
 		</dependency>
 
+		<!-- Redis 向量存储依赖 - 已切换到 Pinecone -->
+		<!--
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-vector-store-redis</artifactId>
+		</dependency>
+		-->
+
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-vector-store-pinecone</artifactId>
 		</dependency>
 
 		<!-- Spring AI Advisors for RAG -->
