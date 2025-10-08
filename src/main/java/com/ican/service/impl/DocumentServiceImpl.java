@@ -14,6 +14,7 @@ import com.ican.mapper.DocumentVectorMapper;
 import com.ican.service.DocumentService;
 import com.ican.service.DocumentParserService;
 import com.ican.service.FileStorageService;
+import com.ican.mq.DocumentProcessingProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -51,6 +52,7 @@ public class DocumentServiceImpl implements DocumentService {
     private final FileStorageService fileStorageService;
     private final DocumentVectorMapper documentVectorMapper;
     private final DocumentChunkMapper documentChunkMapper;
+    private final DocumentProcessingProducer documentProcessingProducer;
     
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -76,30 +78,21 @@ public class DocumentServiceImpl implements DocumentService {
         
         log.info("文档上传成功: id={}, title={}, fileUrl={}", document.getId(), document.getTitle(), fileUrl);
         
-        // 4. 解析文档内容
+        // 4. 发送异步处理消息（解析、向量化、ES索引）
         try {
             document.setStatus("processing");
             documentMapper.updateById(document);
             
-            String content = documentParserService.parseDocument(file);
-            if (StrUtil.isBlank(content)) {
-                throw new BusinessException("文档内容为空，无法处理");
-            }
+            // 发送到消息队列进行异步处理
+            documentProcessingProducer.sendDocumentProcessingMessage(document.getId(), document.getUserId());
             
-            vectorizeAndStore(document.getId(), content, document.getUserId());
-            
-            // 更新状态为已完成
-            document.setStatus("completed");
-            document.setUpdateTime(LocalDateTime.now());
-            documentMapper.updateById(document);
-            
-            log.info("文档处理完成: id={}", document.getId());
+            log.info("文档已提交异步处理队列: id={}", document.getId());
         } catch (Exception e) {
-            log.error("文档处理失败: id={}", document.getId(), e);
+            log.error("提交文档处理消息失败: id={}", document.getId(), e);
             document.setStatus("failed");
             document.setUpdateTime(LocalDateTime.now());
             documentMapper.updateById(document);
-            throw e; // 重新抛出异常
+            throw new BusinessException("文档处理提交失败: " + e.getMessage());
         }
         
         return document.getId();

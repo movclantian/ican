@@ -5,7 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.ican.config.RAGConfig;
 import com.ican.mapper.DocumentMapper;
 import com.ican.model.entity.DocumentDO;
+import com.ican.model.entity.DocumentES;
 import com.ican.model.vo.DocumentVO;
+import com.ican.service.DocumentESService;
 import com.ican.service.SearchService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +37,7 @@ public class SearchServiceImpl implements SearchService {
     private final DocumentMapper documentMapper;
     private final VectorStore vectorStore;
     private final RAGConfig ragConfig;
+    private final DocumentESService documentESService;
     
     @Override
     public List<DocumentVO> searchDocuments(String keyword, String type, Long userId) {
@@ -102,24 +105,46 @@ public class SearchServiceImpl implements SearchService {
                 }
             }
             
-            // 2. 全文检索 - 基于关键词匹配
-            LambdaQueryWrapper<DocumentDO> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(DocumentDO::getUserId, userId)
-                   .eq(DocumentDO::getIsDeleted, 0); // 只查询未删除的文档
-            
-            if (StrUtil.isNotBlank(query)) {
-                wrapper.like(DocumentDO::getTitle, query);
-            }
-            
-            wrapper.orderByDesc(DocumentDO::getCreateTime);
-            List<DocumentDO> textResults = documentMapper.selectList(wrapper);
+            // 2. 全文检索 - 使用Elasticsearch进行高级文本搜索
+            List<DocumentES> esResults = documentESService.searchDocuments(userId, query);
             
             // 提取全文检索的文档ID和分数
             Map<Long, Double> textScores = new HashMap<>();
-            for (DocumentDO doc : textResults) {
-                // 改进的TF分数计算
-                double score = calculateTextScore(doc.getTitle(), query);
-                textScores.put(doc.getId(), score);
+            
+            if (!esResults.isEmpty()) {
+                // 使用ES搜索结果
+                log.info("使用ES搜索结果: count={}", esResults.size());
+                for (int i = 0; i < esResults.size(); i++) {
+                    DocumentES doc = esResults.get(i);
+                    // 基于排名计算分数: 排名越前分数越高
+                    double score = 1.0 - (i * 0.1);  // 第一个1.0, 第二个0.9, 以此类推
+                    if (score < 0.1) score = 0.1;  // 最低分0.1
+                    
+                    // 如果标题和内容都匹配，提升分数
+                    if (doc.getTitle().contains(query) && doc.getContent().contains(query)) {
+                        score *= 1.2;
+                    }
+                    
+                    textScores.put(doc.getId(), score);
+                }
+            } else {
+                // ES降级处理：使用数据库查询
+                log.warn("ES搜索返回空结果或失败，降级使用数据库查询");
+                LambdaQueryWrapper<DocumentDO> wrapper = new LambdaQueryWrapper<>();
+                wrapper.eq(DocumentDO::getUserId, userId)
+                       .eq(DocumentDO::getIsDeleted, 0);
+                
+                if (StrUtil.isNotBlank(query)) {
+                    wrapper.like(DocumentDO::getTitle, query);
+                }
+                
+                wrapper.orderByDesc(DocumentDO::getCreateTime);
+                List<DocumentDO> textResults = documentMapper.selectList(wrapper);
+                
+                for (DocumentDO doc : textResults) {
+                    double score = calculateTextScore(doc.getTitle(), query);
+                    textScores.put(doc.getId(), score);
+                }
             }
             
             // 3. 融合排序 (Reciprocal Rank Fusion - RRF)
@@ -156,7 +181,7 @@ public class SearchServiceImpl implements SearchService {
             }
             
             log.info("混合搜索完成: query={}, vectorResults={}, textResults={}, finalResults={}", 
-                query, vectorResults.size(), textResults.size(), results.size());
+                query, vectorResults.size(), textScores.size(), results.size());
             
             return results;
             

@@ -387,3 +387,7 @@ spring.ai:
         jdbc:
           # 自动初始化数据库表结构
           initialize-schema: always
+spring:
+  elasticsearch:
+    uris:
+    - http://localhost:9201
