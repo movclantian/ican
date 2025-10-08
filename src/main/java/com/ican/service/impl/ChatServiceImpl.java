@@ -22,6 +22,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -56,6 +57,13 @@ public class ChatServiceImpl implements ChatService {
     private final ChatConfig chatConfig;
     private final VectorStore vectorStore;
     private final RAGConfig ragConfig;
+    
+    // 注入 ChatClient Bean（避免每次创建）
+    private final ChatClient normalChatClient;
+    private final ChatClient ragChatClient;
+    
+    // 注入提示词模板
+    private final String sessionTitlePromptTemplate;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -156,6 +164,7 @@ public class ChatServiceImpl implements ChatService {
 
     /**
      * RAG增强对话
+     * 优化：使用注入的 ragChatClient Bean，避免每次创建
      */
     private String chatWithRag(String conversationId, String userMessage, Integer topK, Long userId) {
         // 使用配置的topK或传入的topK
@@ -164,7 +173,7 @@ public class ChatServiceImpl implements ChatService {
         // 构建用户过滤表达式,只检索该用户的文档
         var filterExpression = new FilterExpressionBuilder().eq("userId", userId).build();
         
-        // 构建 SearchRequest
+        // 构建 SearchRequest（针对用户特定文档）
         SearchRequest searchRequest = SearchRequest.builder()
             .query(userMessage)  // 使用用户问题作为查询
             .topK(ragTopK)
@@ -172,38 +181,23 @@ public class ChatServiceImpl implements ChatService {
             .filterExpression(filterExpression)
             .build();
         
-        // 使用 QuestionAnswerAdvisor 自动处理 RAG
+        // 创建针对当前查询的 QuestionAnswerAdvisor
         QuestionAnswerAdvisor qaAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
             .searchRequest(searchRequest)
             .build();
         
-        // 获取历史对话
-        List<Message> history = getConversationHistory(conversationId);
-        List<Message> limitedHistory = (history != null && !history.isEmpty()) 
-            ? limitHistoryMessages(history) 
-            : new ArrayList<>();
-        
-        // 构建系统提示
-        String systemPrompt = "你是一个智能助手。请基于提供的参考文档回答用户问题。" +
-            "如果参考文档中没有相关信息,请基于你的知识回答,并说明这不是来自文档。";
-        
-        // 使用 ChatClient 进行 RAG 对话
-        ChatClient chatClient = ChatClient.builder(openAiChatModel)
-            .defaultAdvisors(qaAdvisor)  // QuestionAnswerAdvisor 会自动检索文档并增强提示
-            .defaultSystem(systemPrompt)
-            .defaultOptions(OpenAiChatOptions.builder()
-                .temperature(chatConfig.getTemperature())
-                .maxTokens(chatConfig.getMaxTokens())
-                .build())
-            .build();
+        // 获取并限制历史对话
+        List<Message> history = getConversationHistoryWithCache(conversationId);
+        List<Message> limitedHistory = limitHistoryMessages(history);
         
         // 构建包含历史对话的消息列表
         List<Message> messages = new ArrayList<>();
         messages.addAll(limitedHistory);
         messages.add(new UserMessage(userMessage));
         
-        // 执行 RAG 对话
-        String response = chatClient.prompt()
+        // 使用注入的 ragChatClient，通过 advisors 参数动态添加用户特定的 Advisor
+        String response = ragChatClient.prompt()
+            .advisors(qaAdvisor)  // 动态添加用户过滤的 Advisor
             .messages(messages)
             .call()
             .content();
@@ -212,7 +206,7 @@ public class ChatServiceImpl implements ChatService {
             throw new BusinessException("RAG对话响应为空,请重新提问");
         }
         
-        // 保存到记忆库(保存原始用户消息)
+        // 保存到记忆库
         try {
             UserMessage userMsg = new UserMessage(userMessage);
             AssistantMessage assistantMessage = new AssistantMessage(response);
@@ -397,25 +391,9 @@ public class ChatServiceImpl implements ChatService {
             .searchRequest(searchRequest)
             .build();
         
-        // 获取历史对话
-        List<Message> history = getConversationHistory(conversationId);
-        List<Message> limitedHistory = (history != null && !history.isEmpty()) 
-            ? limitHistoryMessages(history) 
-            : new ArrayList<>();
-        
-        // 构建系统提示
-        String systemPrompt = "你是一个智能助手。请基于提供的参考文档回答用户问题。" +
-            "如果参考文档中没有相关信息,请基于你的知识回答,并说明这不是来自文档。";
-        
-        // 使用 ChatClient 进行 RAG 流式对话
-        ChatClient chatClient = ChatClient.builder(openAiChatModel)
-            .defaultAdvisors(qaAdvisor)
-            .defaultSystem(systemPrompt)
-            .defaultOptions(OpenAiChatOptions.builder()
-                .temperature(chatConfig.getTemperature())
-                .maxTokens(chatConfig.getMaxTokens())
-                .build())
-            .build();
+        // 获取并限制历史对话
+        List<Message> history = getConversationHistoryWithCache(conversationId);
+        List<Message> limitedHistory = limitHistoryMessages(history);
         
         // 构建包含历史对话的消息列表
         List<Message> messages = new ArrayList<>();
@@ -428,8 +406,9 @@ public class ChatServiceImpl implements ChatService {
         // 标记是否已保存消息
         final boolean[] messageSaved = {false};
         
-        // 执行 RAG 流式对话
-        chatClient.prompt()
+        // 执行 RAG 流式对话（使用注入的 ragChatClient）
+        ragChatClient.prompt()
+            .advisors(qaAdvisor)  // 动态添加用户过滤的 Advisor
             .messages(messages)
             .stream()
             .content()
@@ -686,7 +665,7 @@ public class ChatServiceImpl implements ChatService {
 
     /**
      * 使用 AI 生成并更新会话标题
-     * 根据用户的第一条消息,让 AI 提取关键内容作为标题
+     * 优化：使用提示词模板，代码更简洁
      */
     private void generateAndUpdateSessionTitle(String conversationId, String firstMessage) {
         ChatSessionDO session = chatSessionMapper.selectOne(new LambdaQueryWrapper<ChatSessionDO>()
@@ -694,49 +673,59 @@ public class ChatServiceImpl implements ChatService {
 
         if (session != null && "新对话".equals(session.getTitle())) {
             try {
-                // 构建提示词,让 AI 生成简洁的标题
-                String titlePrompt = "请根据以下问题,提取关键内容生成一个简洁的会话标题(不超过15个字,不要有标点符号):\n" + firstMessage;
-
-                List<Message> titleMessages = new ArrayList<>();
-                titleMessages.add(new SystemMessage("你是一个标题生成助手,请直接输出标题内容,不要有任何多余的文字和标点符号。"));
-                titleMessages.add(new UserMessage(titlePrompt));
-
-                Prompt prompt = new Prompt(titleMessages);
-                ChatResponse response = openAiChatModel.call(prompt);
-                String generatedTitle = response.getResult().getOutput().getText();
-                if (generatedTitle == null) {
-                    generatedTitle = "";
-                } else {
+                // 使用提示词模板生成标题
+                String userPrompt = sessionTitlePromptTemplate.replace("{message}", firstMessage);
+                
+                // 使用 normalChatClient 生成标题
+                String generatedTitle = normalChatClient.prompt()
+                    .user(userPrompt)
+                    .call()
+                    .content();
+                
+                if (generatedTitle != null) {
                     generatedTitle = generatedTitle.trim();
+                    
+                    // 确保标题不超过15个字
+                    if (generatedTitle.length() > 15) {
+                        generatedTitle = generatedTitle.substring(0, 15);
+                    }
+                    
+                    // 移除可能的引号和标点符号
+                    generatedTitle = generatedTitle.replaceAll("[\"'。,!?;:、]", "");
+                    
+                    if (!generatedTitle.isEmpty()) {
+                        session.setTitle(generatedTitle);
+                        session.setUpdateTime(LocalDateTime.now());
+                        chatSessionMapper.updateById(session);
+                        
+                        log.info("AI生成会话标题: conversationId={}, title={}", conversationId, generatedTitle);
+                        return;
+                    }
                 }
-
-                // 确保标题不超过15个字
-                if (generatedTitle.length() > 15) {
-                    generatedTitle = generatedTitle.substring(0, 15);
-                }
-
-                // 移除可能的引号和标点符号
-                generatedTitle = generatedTitle.replaceAll("[\"'。,!?;:、]", "");
-
-                session.setTitle(generatedTitle);
-                session.setUpdateTime(LocalDateTime.now());
-                chatSessionMapper.updateById(session);
-
-                log.info("AI生成会话标题: conversationId={}, title={}", conversationId, generatedTitle);
+                
+                // 如果生成的标题为空，使用默认逻辑
+                useFallbackTitle(session, firstMessage);
             } catch (Exception e) {
-                log.error("生成会话标题失败,使用默认标题", e);
-                // 如果生成失败,使用默认逻辑
-                String title = firstMessage.length() > 15 ? firstMessage.substring(0, 15) + "..." : firstMessage;
-                session.setTitle(title);
-                session.setUpdateTime(LocalDateTime.now());
-                chatSessionMapper.updateById(session);
+                log.error("生成会话标题失败,使用默认标题: conversationId={}", conversationId, e);
+                useFallbackTitle(session, firstMessage);
             }
         }
     }
+    
+    /**
+     * 使用默认逻辑生成标题（后备方案）
+     */
+    private void useFallbackTitle(ChatSessionDO session, String firstMessage) {
+        String title = firstMessage.length() > 15 ? firstMessage.substring(0, 15) + "..." : firstMessage;
+        session.setTitle(title);
+        session.setUpdateTime(LocalDateTime.now());
+        chatSessionMapper.updateById(session);
+    }
 
     /**
-     * 获取对话历史
-     * 优先从 ChatMemoryRepository 获取,如果为空则从数据库恢复
+     * 获取对话历史（带缓存优化）
+     * 优先从 ChatMemoryRepository 获取，如果为空则从数据库恢复
+     * 优化：只在首次为空时才恢复并保存，避免重复保存
      * 
      * @param conversationId 会话ID
      * @return 历史消息列表
@@ -750,7 +739,7 @@ public class ChatServiceImpl implements ChatService {
             if (history == null || history.isEmpty()) {
                 history = recoverHistoryFromDatabase(conversationId);
                 
-                // 如果从数据库恢复了数据,同步到 ChatMemoryRepository
+                // 如果从数据库恢复了数据,同步到 ChatMemoryRepository（只同步一次）
                 if (history != null && !history.isEmpty()) {
                     try {
                         chatMemoryRepository.saveAll(conversationId, history);
@@ -758,16 +747,29 @@ public class ChatServiceImpl implements ChatService {
                             conversationId, history.size());
                     } catch (Exception e) {
                         log.error("恢复上下文到ChatMemoryRepository失败: conversationId={}", conversationId, e);
+                        // 失败不影响流程，返回从数据库读取的历史
                     }
                 }
             }
             
-            return history;
+            return history != null ? history : new ArrayList<>();
         } catch (Exception e) {
             log.error("获取对话历史失败: conversationId={}", conversationId, e);
             // 发生异常时尝试从数据库恢复
-            return recoverHistoryFromDatabase(conversationId);
+            List<Message> fallbackHistory = recoverHistoryFromDatabase(conversationId);
+            return fallbackHistory != null ? fallbackHistory : new ArrayList<>();
         }
+    }
+    
+    /**
+     * 获取对话历史并优化（用于 RAG 等场景）
+     * 直接调用 getConversationHistory，添加方法别名提高可读性
+     * 
+     * @param conversationId 会话ID
+     * @return 历史消息列表（不为null）
+     */
+    private List<Message> getConversationHistoryWithCache(String conversationId) {
+        return getConversationHistory(conversationId);
     }
     
     /**
@@ -863,20 +865,12 @@ public class ChatServiceImpl implements ChatService {
      * @param conversationId 会话ID
      * @param firstMessage 第一条消息
      */
+    @Async
     private void generateSessionTitleAsync(String conversationId, String firstMessage) {
-        // 使用异步方式生成标题,不阻塞主流程
         try {
-            // 这里直接调用同步方法,Spring 的 @Async 需要在配置中开启
-            // 为了简化实现,使用 CompletableFuture
-            java.util.concurrent.CompletableFuture.runAsync(() -> {
-                try {
-                    generateAndUpdateSessionTitle(conversationId, firstMessage);
-                } catch (Exception e) {
-                    log.error("异步生成会话标题失败: conversationId={}", conversationId, e);
-                }
-            });
+            generateAndUpdateSessionTitle(conversationId, firstMessage);
         } catch (Exception e) {
-            log.error("启动异步标题生成失败: conversationId={}", conversationId, e);
+            log.error("异步生成会话标题失败: conversationId={}", conversationId, e);
         }
     }
     

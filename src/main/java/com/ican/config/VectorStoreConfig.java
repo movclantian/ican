@@ -44,13 +44,21 @@ public class VectorStoreConfig {
     public VectorStore vectorStore(EmbeddingModel embeddingModel, JedisPooled jedisPooled) {
         log.info("初始化 Redis 向量存储...");
         log.info("嵌入模型: {}", embeddingModel.getClass().getSimpleName());
-        log.info("索引名称: {}, 前缀: {}", indexName, prefix);
-
-        return RedisVectorStore.builder(jedisPooled, embeddingModel)
-            .indexName(indexName)
-            .prefix(prefix)
-            .initializeSchema(false)
-            .build();
-    }
-    */
+        
+        try {
+            // 根据Spring AI 1.0.3版本，使用简化的配置方式
+            PineconeVectorStore vectorStore = PineconeVectorStore.builder(embeddingModel)
+                .apiKey(apiKey)
+                .indexName(indexName)
+                .namespace(namespace)
+                .build();
+            
+            log.info("Pinecone 向量存储初始化成功");
+            return vectorStore;
+        } catch (Exception e) {
+            log.error("Pinecone 向量存储初始化失败", e);
+            throw new RuntimeException("向量存储初始化失败", e);
+        }
+    }*/
 }
+

@@ -357,17 +357,14 @@ spring.ai:
     #   prefix: "vector:"
     
     # Pinecone 向量存储配置
-    # 请设置以下环境变量：
-    # PINECONE_API_KEY: 您的 Pinecone API 密钥
-    # PINECONE_INDEX_NAME: Pinecone 索引名称
-    # PINECONE_NAMESPACE: Pinecone 命名空间（可选，默认为 default）
+    # 根据Spring AI官方文档，Pinecone配置应该使用以下格式
     pinecone:
-#host:https://springai-gabnl4t.svc.aped-4627-b74a.pinecone.io
       api-key: pcsk_5K7bum_LKCbyfM8gmPhxwhXCQjkdPbc5XkA3q1JZoZ5R6L33GdPW12smEDf84iBWRCpGdc
       index-name: springai
       project-id: gabnl4t
       environment: aped-4627-b74a
-      distance-metadata-field-name: distance
+      # 可选配置
+      namespace: default
       server-side-timeout: 20s
   openai:
     api-key: sk-361aaafb23fd40c7bc3d3f5d9f629d03

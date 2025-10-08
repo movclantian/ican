@@ -4,9 +4,13 @@ import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.ican.config.RAGConfig;
+import com.ican.model.entity.DocumentChunkDO;
 import com.ican.model.entity.DocumentDO;
+import com.ican.model.entity.DocumentVectorDO;
 import com.ican.model.vo.DocumentVO;
+import com.ican.mapper.DocumentChunkMapper;
 import com.ican.mapper.DocumentMapper;
+import com.ican.mapper.DocumentVectorMapper;
 import com.ican.service.DocumentService;
 import com.ican.service.DocumentParserService;
 import com.ican.service.FileStorageService;
@@ -23,6 +27,7 @@ import org.springframework.web.multipart.MultipartFile;
 import top.continew.starter.core.exception.BusinessException;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +49,8 @@ public class DocumentServiceImpl implements DocumentService {
     private final RAGConfig ragConfig;
     private final DocumentParserService documentParserService;
     private final FileStorageService fileStorageService;
+    private final DocumentVectorMapper documentVectorMapper;
+    private final DocumentChunkMapper documentChunkMapper;
     
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -190,21 +197,23 @@ public class DocumentServiceImpl implements DocumentService {
             List<Document> splitDocs = splitter.split(List.of(tempDoc));
             log.info("文档分块完成: id={}, chunks={}", documentId, splitDocs.size());
             
-            // 2. 创建 Document 对象并添加元数据
-            List<Document> documents = splitDocs.stream()
-                .map(doc -> {
-                    Map<String, Object> metadata = new HashMap<>();
-                    metadata.put("documentId", documentId);
-                    metadata.put("userId", userId);
-                    metadata.put("title", document.getTitle());
-                    metadata.put("type", document.getType());
-                    metadata.put("timestamp", System.currentTimeMillis());
-                    
-                    return new Document(doc.getText(), metadata);
-                })
-                .toList();
+            // 2. 创建 Document 对象并添加元数据（优化：带分块索引）
+            List<Document> documents = new ArrayList<>();
+            for (int i = 0; i < splitDocs.size(); i++) {
+                Document doc = splitDocs.get(i);
+                Map<String, Object> metadata = new HashMap<>();
+                metadata.put("documentId", documentId);
+                metadata.put("userId", userId);
+                metadata.put("title", document.getTitle());
+                metadata.put("type", document.getType());
+                metadata.put("chunkIndex", i);  // 添加分块索引
+                metadata.put("timestamp", System.currentTimeMillis());
+                
+                documents.add(new Document(doc.getText(), metadata));
+            }
             
             // 3. 向量化并存储 - 分批处理以符合阿里云嵌入模型的批量大小限制(最多10个)
+            // 优化：记录每个向量的ID和分块内容到数据库
             int batchSize = 10; // 阿里云 text-embedding-v4 限制
             int totalBatches = (int) Math.ceil((double) documents.size() / batchSize);
             
@@ -214,7 +223,43 @@ public class DocumentServiceImpl implements DocumentService {
                 int currentBatch = (i / batchSize) + 1;
                 
                 log.info("向量化批次 {}/{}: 处理 {} 个文档块", currentBatch, totalBatches, batch.size());
+                
+                // 添加到向量库（向量库会为每个Document生成ID）
                 vectorStore.add(batch);
+                
+                // 保存向量ID映射和分块内容到数据库
+                for (Document doc : batch) {
+                    try {
+                        Integer chunkIndex = (Integer) doc.getMetadata().get("chunkIndex");
+                        String vectorId = doc.getId();
+                        
+                        // 保存向量ID映射（用于后续删除）
+                        DocumentVectorDO vectorMapping = DocumentVectorDO.builder()
+                            .documentId(documentId)
+                            .vectorId(vectorId)
+                            .chunkIndex(chunkIndex)
+                            .createTime(LocalDateTime.now())
+                            .build();
+                        documentVectorMapper.insert(vectorMapping);
+                        
+                        // 保存分块内容到document_chunks表
+                        DocumentChunkDO chunk = DocumentChunkDO.builder()
+                            .documentId(documentId)
+                            .chunkIndex(chunkIndex)
+                            .content(doc.getText())
+                            .vectorId(vectorId)
+                            .tokens(doc.getText().length() / 4)  // 粗略估算token数
+                            .metadata(doc.getMetadata())
+                            .createTime(LocalDateTime.now())
+                            .isDeleted(0)
+                            .build();
+                        documentChunkMapper.insert(chunk);
+                        
+                    } catch (Exception e) {
+                        log.warn("保存文档块数据失败: documentId={}, vectorId={}", documentId, doc.getId(), e);
+                        // 不影响主流程，向量已经存储
+                    }
+                }
             }
             
             log.info("文档向量化完成: id={}, vectors={}", documentId, documents.size());
@@ -258,31 +303,52 @@ public class DocumentServiceImpl implements DocumentService {
         }
         
         try {
-            // 1. 从向量库删除 - 通过 metadata 过滤删除
+            // 1. 从向量库删除（优化：使用映射表快速获取向量ID）
             try {
-                // 查询该文档的所有向量
-                SearchRequest searchRequest = SearchRequest.builder()
-                    .query("") // 空查询
-                    .topK(1000) // 获取尽可能多的结果
-                    .similarityThreshold(0.0) // 最低阈值
-                    .filterExpression(new FilterExpressionBuilder().eq("documentId", documentId).build())
-                    .build();
+                // 从映射表查询该文档的所有向量ID
+                List<DocumentVectorDO> vectorMappings = documentVectorMapper.selectList(
+                    new LambdaQueryWrapper<DocumentVectorDO>()
+                        .eq(DocumentVectorDO::getDocumentId, documentId)
+                );
                 
-                List<Document> documents = vectorStore.similaritySearch(searchRequest);
-                
-                // 删除这些文档的向量
-                if (!documents.isEmpty()) {
-                    vectorStore.delete(documents.stream()
-                        .map(Document::getId)
-                        .toList());
-                    log.info("从向量库删除文档向量: documentId={}, count={}", documentId, documents.size());
+                if (!vectorMappings.isEmpty()) {
+                    // 提取向量ID列表
+                    List<String> vectorIds = vectorMappings.stream()
+                        .map(DocumentVectorDO::getVectorId)
+                        .toList();
+                    
+                    // 批量删除向量
+                    vectorStore.delete(vectorIds);
+                    log.info("从向量库删除文档向量: documentId={}, count={}", documentId, vectorIds.size());
+                    
+                    // 删除映射记录
+                    documentVectorMapper.delete(new LambdaQueryWrapper<DocumentVectorDO>()
+                        .eq(DocumentVectorDO::getDocumentId, documentId));
+                } else {
+                    log.warn("未找到文档向量映射记录，尝试通过metadata查询删除: documentId={}", documentId);
+                    
+                    // 后备方案：通过metadata查询删除（兼容旧数据）
+                    SearchRequest searchRequest = SearchRequest.builder()
+                        .query("") // 空查询
+                        .topK(1000) // 获取尽可能多的结果
+                        .similarityThreshold(0.0) // 最低阈值
+                        .filterExpression(new FilterExpressionBuilder().eq("documentId", documentId).build())
+                        .build();
+                    
+                    List<Document> documents = vectorStore.similaritySearch(searchRequest);
+                    if (!documents.isEmpty()) {
+                        vectorStore.delete(documents.stream()
+                            .map(Document::getId)
+                            .toList());
+                        log.info("通过metadata删除文档向量: documentId={}, count={}", documentId, documents.size());
+                    }
                 }
             } catch (Exception e) {
-                log.warn("从向量库删除文档失败: documentId={}", documentId, e);
-                // 向量删除失败不影响整体流程
+                log.error("从向量库删除文档失败: documentId={}", documentId, e);
+                // 向量删除失败不影响数据库删除
             }
             
-            // 2. 从数据库删除
+            // 2. 从数据库删除文档记录
             documentMapper.deleteById(documentId);
             log.info("从数据库删除文档: documentId={}", documentId);
             

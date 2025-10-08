@@ -1,6 +1,7 @@
 package com.ican.service;
 
 import com.ican.model.vo.PaperSummaryVO;
+import com.ican.model.vo.TeachingPlanListVO;
 import com.ican.model.vo.TeachingPlanVO;
 
 import java.util.List;
@@ -49,5 +50,36 @@ public interface RAGService {
      * @return 教学设计内容
      */
     TeachingPlanVO generateTeachingPlan(String topic, String grade, String subject, List<Long> documentIds);
+    
+    /**
+     * 保存教学设计
+     * 
+     * @param teachingPlanVO 教学设计内容
+     * @return 教案ID
+     */
+    Long saveTeachingPlan(TeachingPlanVO teachingPlanVO);
+    
+    /**
+     * 获取用户的教学设计列表
+     * 
+     * @param userId 用户ID
+     * @return 教学设计列表
+     */
+    List<TeachingPlanListVO> getUserTeachingPlans(Long userId);
+    
+    /**
+     * 获取教学设计详情
+     * 
+     * @param planId 教案ID
+     * @return 教学设计详情
+     */
+    TeachingPlanVO getTeachingPlan(Long planId);
+    
+    /**
+     * 删除教学设计
+     * 
+     * @param planId 教案ID
+     */
+    void deleteTeachingPlan(Long planId);
 }
 
