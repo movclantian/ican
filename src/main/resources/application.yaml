@@ -128,7 +128,7 @@ sa-token:
   # token 名称 (同时也是 cookie 名称)
   token-name: Authorization
   # token 有效期(单位:秒) 默认30天, -1 代表永久有效
-  timeout: 2592000
+  timeout: -1
   # token 临时有效期 (指定时间内无操作就视为token过期) 单位: 秒
   active-timeout: -1
   # 是否允许同一账号并发登录 (为 true 时允许一起登录, 为 false 时新登录挤掉旧登录)
@@ -147,7 +147,6 @@ knife4j:
     language: zh_cn
     enable-footer: false
     enable-footer-custom: true
-    footer-custom-content: Apache License 2.0 | Copyright © 2024 [ICan](https://example.com)
 
 springdoc:
   api-docs:
@@ -155,11 +154,10 @@ springdoc:
     path: /v3/api-docs
   swagger-ui:
     enabled: true
-    path: /swagger-ui.html
+    path: /swagger.html
   group-configs:
     - group: 'default'
       paths-to-match: '/**'
-      packages-to-scan: com.ican
 
 --- ### 日志配置
 logging:
@@ -243,7 +241,7 @@ continew-starter:
 spring.servlet:
   multipart:
     # 单个文件最大大小
-    max-file-size: 10MB
+    max-file-size: 100MB
     # 请求最大大小
     max-request-size: 100MB
 
@@ -274,19 +272,6 @@ captcha:
   # 验证码过期时间(分钟)
   expire-minutes: 5
 
---- ### AI 聊天业务配置
-chat:
-  # 历史消息最大数量(防止 Token 超限)
-  max-history-messages: 20
-  # AI 响应温度参数(0.0-2.0),值越高响应越随机
-  temperature: 0.7
-  # AI 响应最大 Token 数
-  max-tokens: 2000
-  # 是否异步生成会话标题(不阻塞主流程)
-  async-title-generation: true
-  # 是否记录 Token 使用情况
-  log-token-usage: true
-
 --- ### 文件存储配置
 file:
   storage:
@@ -296,41 +281,46 @@ file:
 
 --- ### RAG 配置
 rag:
-  # 向量检索配置
-  retrieval:
-    # 默认检索文档数量
-    top-k: 5
-    # 相似度阈值
-    similarity-threshold: 0.7
-    # 是否启用重排序
-    enable-reranking: false
-    # 是否启用混合检索(向量+全文)
-    enable-hybrid-search: false
-  
   # 文档处理配置
   document:
-    # 文档分块大小(token)
+    # 文档分块大小(token) - 建议300-800，太大会影响检索精度，太小会影响上下文完整性
     chunk-size: 500
-    # 块间重叠(token)
+    # 块间重叠(token) - 建议是chunk-size的10-20%，保证上下文连续性
     chunk-overlap: 100
-    # 最小分块字符数
-    min-chunk-size-chars: 5
-    # 最大分块字符数
-    max-chunk-size-chars: 1000
+    # 最小分块字符数 - 过滤掉过短的无意义文本块
+    min-chunk-size-chars: 50
+    # 最大分块字符数 - 防止单个块过大
+    max-chunk-size-chars: 2000
     # 是否保留分隔符
     keep-separator: true
     # 支持的文件类型
     allowed-types: pdf,docx,md,txt
     # 单个文件最大大小(MB)
     max-file-size: 50
-
-  # 混合搜索配置
+  
+  # 检索配置
+  retrieval:
+    # 默认检索文档片段数量 - 建议3-10，太多会增加噪声和token消耗
+    # 跨语言场景建议增加到10，确保覆盖更多候选文档
+    top-k: 10
+    # 相似度阈值 (0.0-1.0) - 跨语言检索时降低阈值到0.2-0.25
+    # text-embedding-v4支持100+语种，中英文混合查询时相似度略低于同语言
+    similarity-threshold: 0.25
+    # 是否启用重排序 - 使用LLM对检索结果重新评分排序，提升精度但增加耗时
+    # 跨语言场景强烈建议启用，可以进一步优化检索质量
+    enable-reranking: true
+    # 重排序时的扩展因子 - retrieveTopK = topK * expandFactor，先多检索再重排
+    rerank-expand-factor: 6
+    # 是否启用混合检索 - 结合向量检索和全文检索，适用于SearchService
+    enable-hybrid-search: true
+  
+  # 混合搜索配置（仅在 enable-hybrid-search=true 时生效）
   hybrid-search:
-    # 向量搜索数量
+    # 向量搜索数量 - 混合检索时向量检索的文档数
     vector-top-k: 20
     # 向量相似度阈值
     vector-similarity-threshold: 0.5
-    # 向量搜索权重
+    # 向量搜索权重 - 向量检索和全文检索的权重比例，总和应为1.0
     vector-weight: 0.6
     # 全文搜索权重
     text-weight: 0.4
@@ -341,23 +331,15 @@ spring.ai:
     max-attempts: 3
     backoff:
       # 初始退避间隔(毫秒)
-      initial-interval: 2000
+      initial-interval: 20000
       # 退避间隔乘数
       multiplier: 2
       # 最大退避间隔(毫秒)
-      max-interval: 10000
+      max-interval: 100000
     # 是否对客户端错误(4xx)进行重试
     on-client-errors: false
   ## Vector Store 配置
   vectorstore:
-    # Redis 向量存储配置 - 已切换到 Pinecone
-    # redis:
-    #   initialize-schema: true
-    #   index-name: vector-index
-    #   prefix: "vector:"
-    
-    # Pinecone 向量存储配置
-    # 根据Spring AI官方文档，Pinecone配置应该使用以下格式
     pinecone:
       api-key: pcsk_5K7bum_LKCbyfM8gmPhxwhXCQjkdPbc5XkA3q1JZoZ5R6L33GdPW12smEDf84iBWRCpGdc
       index-name: springai
@@ -375,10 +357,9 @@ spring.ai:
         # 温度参数(0.0-2.0),控制响应的随机性
         temperature: 0.7
         # 最大生成token数,避免响应过长导致超时
-        max-tokens: 2000
+        max-tokens: 10000
     embedding:
       options:
-        # 嵌入模型名称 - 使用阿里云通义千问的嵌入模型
         model: text-embedding-v4
   ## Chat Memory 配置
   chat:
@@ -387,6 +368,13 @@ spring.ai:
         jdbc:
           # 自动初始化数据库表结构
           initialize-schema: always
+# 自定义聊天配置
+chat:
+  # 最大历史消息数量
+  max-history-messages: 10
+  # 是否异步生成标题
+  async-title-generation: true
+
 spring:
   elasticsearch:
     uris:

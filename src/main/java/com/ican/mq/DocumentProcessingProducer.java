@@ -37,15 +37,27 @@ public class DocumentProcessingProducer {
      * @param userId 用户ID
      */
     public void sendDocumentProcessingMessage(Long documentId, Long userId) {
+        sendDocumentProcessingMessage(documentId, userId, null);
+    }
+    
+    /**
+     * 发送文档处理消息（带任务跟踪）
+     * 
+     * @param documentId 文档ID
+     * @param userId 用户ID
+     * @param taskId 任务ID
+     */
+    public void sendDocumentProcessingMessage(Long documentId, Long userId, Long taskId) {
         DocumentProcessingMessage message = DocumentProcessingMessage.builder()
             .documentId(documentId)
             .userId(userId)
+            .taskId(taskId)
             .processingType("full")
             .build();
         
         rabbitTemplate.convertAndSend(RabbitMQConfig.DOCUMENT_PROCESSING_QUEUE, message);
         
-        log.info("发送文档处理任务到队列: documentId={}, userId={}", documentId, userId);
+        log.info("发送文档处理任务到队列: documentId={}, userId={}, taskId={}", documentId, userId, taskId);
     }
 }
 

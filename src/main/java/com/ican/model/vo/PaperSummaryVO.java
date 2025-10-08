@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -44,6 +45,22 @@ public class PaperSummaryVO {
      */
     private List<String> keywords;
     
+    /**
+     * 验证和填充默认值
+     */
+    public void validate() {
+        if (authors == null) {
+            authors = new ArrayList<>();
+        }
+        if (keywords == null) {
+            keywords = new ArrayList<>();
+        }
+        if (summary == null) {
+            summary = new SummaryContent();
+        }
+        summary.validate();
+    }
+    
     @Data
     @Builder
     @NoArgsConstructor
@@ -73,6 +90,27 @@ public class PaperSummaryVO {
          * 局限性
          */
         private String limitations;
+        
+        /**
+         * 验证和填充默认值
+         */
+        public void validate() {
+            if (innovations == null) {
+                innovations = new ArrayList<>();
+            }
+            if (background == null) {
+                background = "";
+            }
+            if (methodology == null) {
+                methodology = "";
+            }
+            if (results == null) {
+                results = "";
+            }
+            if (limitations == null) {
+                limitations = "";
+            }
+        }
     }
 }
 

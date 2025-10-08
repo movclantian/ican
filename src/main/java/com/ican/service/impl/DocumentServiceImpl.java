@@ -1,12 +1,14 @@
 package com.ican.service.impl;
 
 import cn.dev33.satoken.stp.StpUtil;
+import cn.hutool.core.codec.Base62;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.ican.config.RAGConfig;
 import com.ican.model.entity.DocumentChunkDO;
 import com.ican.model.entity.DocumentDO;
 import com.ican.model.entity.DocumentVectorDO;
+import com.ican.model.vo.DocumentFileVO;
 import com.ican.model.vo.DocumentVO;
 import com.ican.mapper.DocumentChunkMapper;
 import com.ican.mapper.DocumentMapper;
@@ -14,6 +16,7 @@ import com.ican.mapper.DocumentVectorMapper;
 import com.ican.service.DocumentService;
 import com.ican.service.DocumentParserService;
 import com.ican.service.FileStorageService;
+import com.ican.service.DocumentTaskService;
 import com.ican.mq.DocumentProcessingProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +27,8 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import top.continew.starter.core.exception.BusinessException;
 
@@ -53,6 +58,7 @@ public class DocumentServiceImpl implements DocumentService {
     private final DocumentVectorMapper documentVectorMapper;
     private final DocumentChunkMapper documentChunkMapper;
     private final DocumentProcessingProducer documentProcessingProducer;
+    private final DocumentTaskService documentTaskService;
     
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -78,30 +84,57 @@ public class DocumentServiceImpl implements DocumentService {
         
         log.info("文档上传成功: id={}, title={}, fileUrl={}", document.getId(), document.getTitle(), fileUrl);
         
-        // 4. 发送异步处理消息（解析、向量化、ES索引）
-        try {
-            document.setStatus("processing");
-            documentMapper.updateById(document);
-            
-            // 发送到消息队列进行异步处理
-            documentProcessingProducer.sendDocumentProcessingMessage(document.getId(), document.getUserId());
-            
-            log.info("文档已提交异步处理队列: id={}", document.getId());
-        } catch (Exception e) {
-            log.error("提交文档处理消息失败: id={}", document.getId(), e);
-            document.setStatus("failed");
-            document.setUpdateTime(LocalDateTime.now());
-            documentMapper.updateById(document);
-            throw new BusinessException("文档处理提交失败: " + e.getMessage());
-        }
+        // 4. 创建任务跟踪记录
+        Long taskId = documentTaskService.createTask(document.getId(), "document_processing");
+        log.info("创建文档处理任务: documentId={}, taskId={}", document.getId(), taskId);
         
-        return document.getId();
+        // 5. 更新状态为处理中（在事务内完成）
+        document.setStatus("processing");
+        documentMapper.updateById(document);
+        
+        // 更新任务状态为处理中
+        documentTaskService.updateTaskStatus(taskId, "processing", 10, null);
+        
+        Long documentId = document.getId();
+        
+        // 6. 注册事务提交后的回调：发送异步处理消息
+        // 使用 TransactionSynchronizationManager 确保消息在事务提交后才发送
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        // 事务已提交，现在可以安全地发送消息了
+                        documentProcessingProducer.sendDocumentProcessingMessage(documentId, userId, taskId);
+                        log.info("文档已提交异步处理队列（事务已提交）: id={}", documentId);
+                    } catch (Exception e) {
+                        log.error("提交文档处理消息失败: id={}", documentId, e);
+                        // 注意：这里事务已经提交，无法回滚
+                        // 需要通过补偿机制处理，例如更新状态为failed
+                        try {
+                            DocumentDO failedDoc = documentMapper.selectById(documentId);
+                            if (failedDoc != null) {
+                                failedDoc.setStatus("failed");
+                                failedDoc.setUpdateTime(LocalDateTime.now());
+                                documentMapper.updateById(failedDoc);
+                            }
+                            documentTaskService.updateTaskStatus(taskId, "failed", 0, e.getMessage());
+                        } catch (Exception ex) {
+                            log.error("更新失败状态异常: id={}", documentId, ex);
+                        }
+                    }
+                }
+            }
+        );
+        
+        return documentId;
     }
     
     @Override
     public List<DocumentVO> getUserDocuments(Long userId, String type) {
         LambdaQueryWrapper<DocumentDO> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(DocumentDO::getUserId, userId);
+     wrapper.eq(DocumentDO::getUserId, userId)
+         .eq(DocumentDO::getIsDeleted, 0);
         
         if (StrUtil.isNotBlank(type)) {
             wrapper.eq(DocumentDO::getType, type);
@@ -116,7 +149,7 @@ public class DocumentServiceImpl implements DocumentService {
     @Override
     public DocumentVO getDocument(Long documentId) {
         DocumentDO document = documentMapper.selectById(documentId);
-        if (document == null) {
+        if (document == null || (document.getIsDeleted() != null && document.getIsDeleted() == 1)) {
             throw new BusinessException("文档不存在");
         }
         
@@ -132,7 +165,7 @@ public class DocumentServiceImpl implements DocumentService {
     @Override
     public String parseDocument(Long documentId) {
         DocumentDO document = documentMapper.selectById(documentId);
-        if (document == null) {
+        if (document == null || (document.getIsDeleted()!=null && document.getIsDeleted()==1)) {
             throw new BusinessException("文档不存在");
         }
         
@@ -142,7 +175,11 @@ public class DocumentServiceImpl implements DocumentService {
             
             // 根据文件类型解析
             String filename = document.getTitle();
-            String extension = filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
+            int dot = filename.lastIndexOf('.');
+            if (dot < 0 || dot == filename.length()-1) {
+                throw new BusinessException("无法识别的文件类型");
+            }
+            String extension = filename.substring(dot + 1).toLowerCase();
             
             String content;
             // 根据文件扩展名选择解析器
@@ -191,12 +228,15 @@ public class DocumentServiceImpl implements DocumentService {
             log.info("文档分块完成: id={}, chunks={}", documentId, splitDocs.size());
             
             // 2. 创建 Document 对象并添加元数据（优化：带分块索引）
+            // 重要：使用 Base62 编码存储 Long ID，避免向量库 Double 精度丢失
+            // 原理：Long -> Base62字符串，完全避免精度问题（1976521493122658306 -> "aDeMo8kL6")
             List<Document> documents = new ArrayList<>();
             for (int i = 0; i < splitDocs.size(); i++) {
                 Document doc = splitDocs.get(i);
                 Map<String, Object> metadata = new HashMap<>();
-                metadata.put("documentId", documentId);
-                metadata.put("userId", userId);
+                // 使用 Hutool Base62 编码 Long ID
+                metadata.put("documentId", Base62.encode(String.valueOf(documentId)));
+                metadata.put("userId", Base62.encode(String.valueOf(userId)));
                 metadata.put("title", document.getTitle());
                 metadata.put("type", document.getType());
                 metadata.put("chunkIndex", i);  // 添加分块索引
@@ -265,15 +305,37 @@ public class DocumentServiceImpl implements DocumentService {
     @Override
     public List<Document> searchSimilarDocuments(String query, int topK) {
         try {
+            // 获取配置的相似度阈值
+            double threshold = ragConfig.getRetrieval().getSimilarityThreshold();
+            log.info("开始文档检索: query={}, topK={}, similarityThreshold={}", query, topK, threshold);
+            
+            // 构建检索请求
             SearchRequest request = SearchRequest.builder()
                 .query(query)
                 .topK(topK)
-                .similarityThreshold(ragConfig.getRetrieval().getSimilarityThreshold())
+                .similarityThreshold(threshold)
                 .build();
             
+            // 执行向量检索
             List<Document> results = vectorStore.similaritySearch(request);
             
-            log.info("文档检索完成: query={}, results={}", query, results.size());
+            if (results.isEmpty()) {
+                log.warn("未找到相似文档: query={}, threshold={}, 建议降低相似度阈值或检查向量库中是否有数据", 
+                    query, threshold);
+                return results;
+            }
+            // 输出检索结果详情（包含相似度得分）
+            log.info("文档检索完成: query={}, results={}, threshold={}", query, results.size(), threshold);
+            for (int i = 0; i < results.size(); i++) {
+                Document doc = results.get(i);
+                if (doc.getText() != null) {
+                    log.debug("检索结果[{}]: score={}, content={}, metadata={}",
+                        i, doc.getScore(),
+                        doc.getText().substring(0, Math.min(100, doc.getText().length())),
+                        doc.getMetadata());
+                }
+            }
+            
             return results;
         } catch (Exception e) {
             log.error("文档检索失败: query={}", query, e);
@@ -325,7 +387,8 @@ public class DocumentServiceImpl implements DocumentService {
                         .query("") // 空查询
                         .topK(1000) // 获取尽可能多的结果
                         .similarityThreshold(0.0) // 最低阈值
-                        .filterExpression(new FilterExpressionBuilder().eq("documentId", documentId).build())
+                        .filterExpression(new FilterExpressionBuilder().eq("documentId", 
+                            Base62.encode(String.valueOf(documentId))).build())
                         .build();
                     
                     List<Document> documents = vectorStore.similaritySearch(searchRequest);
@@ -341,9 +404,11 @@ public class DocumentServiceImpl implements DocumentService {
                 // 向量删除失败不影响数据库删除
             }
             
-            // 2. 从数据库删除文档记录
-            documentMapper.deleteById(documentId);
-            log.info("从数据库删除文档: documentId={}", documentId);
+            // 2. 逻辑删除文档记录（保持与 @TableLogic 一致）
+            document.setIsDeleted(1);
+            document.setUpdateTime(LocalDateTime.now());
+            documentMapper.updateById(document);
+            log.info("逻辑删除文档: documentId={}", documentId);
             
             // 3. 从文件存储删除
             try {
@@ -385,6 +450,21 @@ public class DocumentServiceImpl implements DocumentService {
         if (!ragConfig.getDocument().getAllowedTypesList().contains(extension)) {
             throw new BusinessException("不支持的文件类型: " + extension);
         }
+        
+        // 验证是否已上传（检查当前用户是否已有同名且同大小的文件）
+        Long currentUserId = StpUtil.getLoginIdAsLong();
+        DocumentDO existingDoc = documentMapper.selectOne(
+            new LambdaQueryWrapper<DocumentDO>()
+                .eq(DocumentDO::getUserId, currentUserId)
+                .eq(DocumentDO::getTitle, filename)
+                .eq(DocumentDO::getFileSize, file.getSize())
+                .eq(DocumentDO::getIsDeleted, 0)
+                .last("limit 1")
+        );
+        
+        if (existingDoc != null) {
+            throw new BusinessException("文件已存在: " + filename + " (大小: " + file.getSize() + " 字节)");
+        }
     }
     
     /**
@@ -400,6 +480,233 @@ public class DocumentServiceImpl implements DocumentService {
             .createTime(document.getCreateTime())
             .updateTime(document.getUpdateTime())
             .build();
+    }
+    
+    /**
+     * RAG-05: 重建文档向量索引
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int reindexDocument(Long documentId) {
+        log.info("开始重建文档向量索引: documentId={}", documentId);
+        
+        DocumentDO document = documentMapper.selectById(documentId);
+        if (document == null || (document.getIsDeleted()!=null && document.getIsDeleted()==1)) {
+            throw new BusinessException("文档不存在");
+        }
+        
+        // 权限验证
+        Long currentUserId = StpUtil.getLoginIdAsLong();
+        if (!document.getUserId().equals(currentUserId)) {
+            throw new BusinessException("无权操作该文档");
+        }
+        
+        try {
+            // 标记处理中
+            document.setStatus("processing");
+            document.setUpdateTime(LocalDateTime.now());
+            documentMapper.updateById(document);
+            // 1. 先清除旧向量
+            purgeDocumentVectors(documentId);
+            
+            // 2. 重新解析文档（使用现有方法）
+            String content = parseDocument(documentId);
+            
+            if (StrUtil.isBlank(content)) {
+                throw new BusinessException("文档内容为空，无法建立索引");
+            }
+            
+            // 3. 重新向量化
+            vectorizeAndStore(documentId, content, document.getUserId());
+            
+            // 4. 更新文档状态
+            document.setStatus("completed");
+            document.setUpdateTime(LocalDateTime.now());
+            documentMapper.updateById(document);
+            
+            // 5. 查询新向量数量
+            int vectorCount = documentVectorMapper.selectCount(
+                new LambdaQueryWrapper<DocumentVectorDO>()
+                    .eq(DocumentVectorDO::getDocumentId, documentId)
+            ).intValue();
+            
+            log.info("文档向量索引重建成功: documentId={}, vectorCount={}", documentId, vectorCount);
+            return vectorCount;
+            
+        } catch (Exception e) {
+            log.error("重建文档向量索引失败: documentId={}", documentId, e);
+            document.setStatus("failed");
+            document.setUpdateTime(LocalDateTime.now());
+            documentMapper.updateById(document);
+            throw new BusinessException("重建索引失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * RAG-05: 清除文档向量
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int purgeDocumentVectors(Long documentId) {
+        log.info("开始清除文档向量: documentId={}", documentId);
+        
+        DocumentDO document = documentMapper.selectById(documentId);
+        if (document == null || (document.getIsDeleted()!=null && document.getIsDeleted()==1)) {
+            throw new BusinessException("文档不存在");
+        }
+        
+        // 权限验证
+        Long currentUserId = StpUtil.getLoginIdAsLong();
+        if (!document.getUserId().equals(currentUserId)) {
+            throw new BusinessException("无权操作该文档");
+        }
+        
+        int deletedCount = 0;
+        
+        try {
+            // 从映射表查询向量ID
+            List<DocumentVectorDO> vectorMappings = documentVectorMapper.selectList(
+                new LambdaQueryWrapper<DocumentVectorDO>()
+                    .eq(DocumentVectorDO::getDocumentId, documentId)
+            );
+            
+            if (!vectorMappings.isEmpty()) {
+                // 提取向量ID
+                List<String> vectorIds = vectorMappings.stream()
+                    .map(DocumentVectorDO::getVectorId)
+                    .toList();
+                
+                // 从向量库删除
+                vectorStore.delete(vectorIds);
+                deletedCount = vectorIds.size();
+                
+                // 删除映射记录
+                documentVectorMapper.delete(
+                    new LambdaQueryWrapper<DocumentVectorDO>()
+                        .eq(DocumentVectorDO::getDocumentId, documentId)
+                );
+                
+                // 删除块记录
+                documentChunkMapper.delete(
+                    new LambdaQueryWrapper<DocumentChunkDO>()
+                        .eq(DocumentChunkDO::getDocumentId, documentId)
+                );
+                
+                log.info("文档向量清除成功: documentId={}, count={}", documentId, deletedCount);
+            } else {
+                log.info("文档没有向量记录: documentId={}", documentId);
+            }
+            
+            return deletedCount;
+            
+        } catch (Exception e) {
+            log.error("清除文档向量失败: documentId={}", documentId, e);
+            throw new BusinessException("清除向量失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * RAG-05: 批量重建向量索引
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int batchReindexDocuments(List<Long> documentIds) {
+        log.info("开始批量重建向量索引: documentIds={}", documentIds);
+        
+        if (documentIds == null || documentIds.isEmpty()) {
+            return 0;
+        }
+        
+        int successCount = 0;
+        List<String> errors = new ArrayList<>();
+        
+        for (Long documentId : documentIds) {
+            try {
+                reindexDocument(documentId);
+                successCount++;
+            } catch (Exception e) {
+                log.error("重建文档索引失败: documentId={}", documentId, e);
+                errors.add("文档 " + documentId + ": " + e.getMessage());
+            }
+        }
+        
+        log.info("批量重建完成: total={}, success={}, failed={}", 
+            documentIds.size(), successCount, documentIds.size() - successCount);
+        
+        if (!errors.isEmpty()) {
+            throw new BusinessException("部分文档重建失败: " + String.join("; ", errors));
+        }
+        
+        return successCount;
+    }
+    
+    /**
+     * 获取文档文件用于预览或下载
+     */
+    @Override
+    public DocumentFileVO getDocumentFile(Long documentId) {
+        log.info("获取文档文件: documentId={}", documentId);
+        
+        // 1. 查询文档记录
+        DocumentDO document = documentMapper.selectById(documentId);
+        if (document == null || (document.getIsDeleted() != null && document.getIsDeleted() == 1)) {
+            throw new BusinessException("文档不存在");
+        }
+        
+        // 2. 权限验证
+        Long currentUserId = StpUtil.getLoginIdAsLong();
+        if (!document.getUserId().equals(currentUserId)) {
+            throw new BusinessException("无权访问该文档");
+        }
+        
+        try {
+            // 3. 从存储服务下载文件
+            byte[] fileData = fileStorageService.downloadFile(document.getFileUrl());
+            
+            // 4. 确定内容类型
+            String filename = document.getTitle();
+            String contentType = determineContentType(filename);
+            
+            log.info("文档文件获取成功: documentId={}, filename={}, size={}", 
+                    documentId, filename, fileData.length);
+            
+            return DocumentFileVO.builder()
+                    .filename(filename)
+                    .contentType(contentType)
+                    .data(fileData)
+                    .build();
+                    
+        } catch (Exception e) {
+            log.error("获取文档文件失败: documentId={}", documentId, e);
+            throw new BusinessException("获取文档文件失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 根据文件名确定内容类型
+     */
+    private String determineContentType(String filename) {
+        if (StrUtil.isBlank(filename)) {
+            return "application/octet-stream";
+        }
+        
+        int dot = filename.lastIndexOf('.');
+        if (dot < 0 || dot == filename.length() - 1) {
+            return "application/octet-stream";
+        }
+        
+        String extension = filename.substring(dot + 1).toLowerCase();
+        return switch (extension) {
+            case "pdf" -> "application/pdf";
+            case "doc" -> "application/msword";
+            case "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            case "txt" -> "text/plain";
+            case "md", "markdown" -> "text/markdown";
+            case "html", "htm" -> "text/html";
+            case "json" -> "application/json";
+            case "xml" -> "application/xml";
+            default -> "application/octet-stream";
+        };
     }
 }
 

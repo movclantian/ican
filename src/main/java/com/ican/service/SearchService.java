@@ -1,6 +1,7 @@
 package com.ican.service;
 
 import com.ican.model.vo.DocumentVO;
+import com.ican.model.vo.SearchResultVO;
 
 import java.util.List;
 
@@ -30,5 +31,25 @@ public interface SearchService {
      * @return 文档列表
      */
     List<DocumentVO> hybridSearch(String query, Long userId);
+    
+    /**
+     * 统一搜索 API (SR-01)
+     * 结合向量检索和全文检索，返回带高亮的结果
+     * 
+     * @param query 查询文本
+     * @param type 文档类型(可选)
+     * @param topK 返回数量
+    * @param userId 当前登录用户ID（用于数据隔离）
+     * @return 搜索结果列表（带高亮片段）
+     */
+    List<SearchResultVO> unifiedSearch(String query, String type, Integer topK, Long userId);
+    
+    /**
+     * 查询纠错 (SR-03)
+     * 
+     * @param query 原始查询
+     * @return 纠错后的查询
+     */
+    String correctQuery(String query);
 }
 

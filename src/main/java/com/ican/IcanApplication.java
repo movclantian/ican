@@ -20,6 +20,10 @@ public class IcanApplication {
 
 	public static void main(String[] args) {
 		SpringApplication.run(IcanApplication.class, args);
+		System.out.println("===========================================================\n"+
+		 "帮助文档 UI (Knife4j): " + "http://localhost:8080/doc.html\n"
+		 + "===========================================================");
+
 	}
 
 }

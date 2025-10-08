@@ -25,4 +25,16 @@ public class ChatRequestDTO {
 
     @Schema(description = "RAG检索文档数量,默认5")
     private Integer ragTopK = 5;
+    
+    @Schema(description = "自定义温度参数(0.0-2.0),覆盖默认配置")
+    private Double customTemperature;
+    
+    @Schema(description = "自定义最大Token数,覆盖默认配置")
+    private Integer customMaxTokens;
+    
+    @Schema(description = "自定义相似度阈值(RAG时使用),覆盖默认配置")
+    private Double customSimilarityThreshold;
+    
+    @Schema(description = "是否启用对话记忆,默认true")
+    private Boolean enableMemory = true;
 }

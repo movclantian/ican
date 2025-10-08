@@ -11,8 +11,10 @@ import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 /**
  * ChatClient 配置类
@@ -29,21 +31,31 @@ public class ChatClientConfig {
     private final OpenAiChatModel openAiChatModel;
     private final VectorStore vectorStore;
     private final RAGConfig ragConfig;
-    private final ChatConfig chatConfig;
     private final JdbcChatMemoryRepository chatMemoryRepository;
+    
+    @Value("${spring.ai.openai.chat.options.temperature}")
+    private Double temperature;
+    
+    @Value("${spring.ai.openai.chat.options.max-tokens}")
+    private Integer maxTokens;
+
+    @Value("${chat.max-history-messages}")
+    private Integer maxHistoryMessages;
     
     /**
      * 普通聊天的 ChatClient（不带 RAG）
      * 使用 MessageChatMemoryAdvisor 自动管理对话历史
      */
     @Bean("normalChatClient")
+    @Primary
     public ChatClient normalChatClient() {
         log.info("初始化普通聊天 ChatClient");
         
         return ChatClient.builder(openAiChatModel)
+                .defaultAdvisors()
             .defaultOptions(OpenAiChatOptions.builder()
-                .temperature(chatConfig.getTemperature())
-                .maxTokens(chatConfig.getMaxTokens())
+                .temperature(temperature)
+                .maxTokens(maxTokens)
                 .build())
             .defaultSystem("你是一个智能AI助手，请友好、专业地回答用户的问题。")
             .build();
@@ -73,8 +85,8 @@ public class ChatClientConfig {
         return ChatClient.builder(openAiChatModel)
             .defaultAdvisors(qaAdvisor)
             .defaultOptions(OpenAiChatOptions.builder()
-                .temperature(chatConfig.getTemperature())
-                .maxTokens(chatConfig.getMaxTokens())
+                .temperature(temperature)
+                .maxTokens(maxTokens)
                 .build())
             .defaultSystem("""
                 你是一个专业的AI助手，擅长基于提供的参考资料回答问题。
@@ -95,11 +107,10 @@ public class ChatClientConfig {
      */
     @Bean
     public ChatMemory chatMemory() {
-        log.info("初始化 ChatMemory，maxMessages={}", chatConfig.getMaxHistoryMessages());
-        
+        log.info("初始化 ChatMemory，maxMessages={}", maxHistoryMessages);
         return MessageWindowChatMemory.builder()
             .chatMemoryRepository(chatMemoryRepository)
-            .maxMessages(chatConfig.getMaxHistoryMessages())
+            .maxMessages(maxHistoryMessages)
             .build();
     }
 }

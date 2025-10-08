@@ -47,12 +47,17 @@ public class RAGConfig {
         /**
          * 相似度阈值
          */
-        private Double similarityThreshold = 0.7;
+        private Double similarityThreshold = 0.3;
         
         /**
          * 是否启用重排序
          */
-        private Boolean enableReranking = false;
+        private Boolean enableReranking = true;
+        
+        /**
+         * 重排序扩展因子（初始检索数量 = topK * expandFactor）
+         */
+        private Integer rerankExpandFactor = 6;
         
         /**
          * 是否启用混合检索

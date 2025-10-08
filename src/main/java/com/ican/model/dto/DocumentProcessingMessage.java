@@ -32,6 +32,11 @@ public class DocumentProcessingMessage implements Serializable {
     private Long userId;
     
     /**
+     * 任务ID（用于跟踪进度）
+     */
+    private Long taskId;
+    
+    /**
      * 处理类型: parse, vectorize, index
      */
     private String processingType;

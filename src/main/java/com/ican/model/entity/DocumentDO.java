@@ -30,6 +30,11 @@ public class DocumentDO implements Serializable {
     private Long userId;
     
     /**
+     * 所属知识库ID (可选)
+     */
+    private Long kbId;
+    
+    /**
      * 文档标题
      */
     private String title;

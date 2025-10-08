@@ -1,5 +1,6 @@
 package com.ican.service;
 
+import com.ican.model.vo.DocumentFileVO;
 import com.ican.model.vo.DocumentVO;
 import org.springframework.ai.document.Document;
 import org.springframework.web.multipart.MultipartFile;
@@ -73,5 +74,37 @@ public interface DocumentService {
      * @param documentId 文档ID
      */
     void deleteDocument(Long documentId);
+    
+    /**
+     * 重建文档向量索引 (RAG-05)
+     * 
+     * @param documentId 文档ID
+     * @return 重建的向量数量
+     */
+    int reindexDocument(Long documentId);
+    
+    /**
+     * 清除文档的所有向量 (RAG-05)
+     * 
+     * @param documentId 文档ID
+     * @return 删除的向量数量
+     */
+    int purgeDocumentVectors(Long documentId);
+    
+    /**
+     * 批量重建向量索引
+     * 
+     * @param documentIds 文档ID列表
+     * @return 成功重建的文档数量
+     */
+    int batchReindexDocuments(List<Long> documentIds);
+    
+    /**
+     * 获取文档文件用于预览或下载
+     * 
+     * @param documentId 文档ID
+     * @return 文档文件VO
+     */
+    DocumentFileVO getDocumentFile(Long documentId);
 }
 

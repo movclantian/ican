@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -59,10 +60,6 @@ public class TeachingPlanVO {
      */
     private List<TeachingStep> teachingSteps;
     
-    /**
-     * 评价方案
-     */
-    private EvaluationPlan evaluation;
     
     /**
      * 作业建议
@@ -73,6 +70,38 @@ public class TeachingPlanVO {
      * 教学资源
      */
     private List<String> resources;
+    
+    /**
+     * 验证和填充默认值
+     */
+    public void validate() {
+        if (objectives == null) {
+            objectives = new TeachingObjectives();
+        }
+        objectives.validate();
+        
+        if (keyPoints == null) {
+            keyPoints = new ArrayList<>();
+        }
+        if (difficulties == null) {
+            difficulties = new ArrayList<>();
+        }
+        if (teachingSteps == null) {
+            teachingSteps = new ArrayList<>();
+        } else {
+            teachingSteps.forEach(step -> {
+                if (step != null) {
+                    step.validate();
+                }
+            });
+        }
+        if (assignments == null) {
+            assignments = new ArrayList<>();
+        }
+        if (resources == null) {
+            resources = new ArrayList<>();
+        }
+    }
     
     /**
      * 教学目标
@@ -96,6 +125,21 @@ public class TeachingPlanVO {
          * 情感态度价值观目标
          */
         private List<String> values;
+        
+        /**
+         * 验证和填充默认值
+         */
+        public void validate() {
+            if (knowledge == null) {
+                knowledge = new ArrayList<>();
+            }
+            if (skills == null) {
+                skills = new ArrayList<>();
+            }
+            if (values == null) {
+                values = new ArrayList<>();
+            }
+        }
     }
     
     /**
@@ -130,25 +174,15 @@ public class TeachingPlanVO {
          * 教学活动
          */
         private List<String> activities;
-    }
-    
-    /**
-     * 评价方案
-     */
-    @Data
-    @Builder
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class EvaluationPlan {
-        /**
-         * 评价方法
-         */
-        private List<String> methods;
         
         /**
-         * 评价标准
+         * 验证和填充默认值
          */
-        private List<String> criteria;
-    }
+        public void validate() {
+            if (activities == null) {
+                activities = new ArrayList<>();
+            }
+        }
+    } 
 }
 
