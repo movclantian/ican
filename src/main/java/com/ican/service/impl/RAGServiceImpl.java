@@ -278,39 +278,50 @@ public class RAGServiceImpl implements RAGService {
         Long userId = StpUtil.getLoginIdAsLong();
         validateDocumentAccess(documentId, userId);
 
-        // 优化: 减少chunk数量,避免超出token限制(从40减少到30)
-        List<DocumentChunkDO> chunks = documentChunkMapper.selectList(
+        // 获取所有分块
+        List<DocumentChunkDO> allChunks = documentChunkMapper.selectList(
                 new LambdaQueryWrapper<DocumentChunkDO>()
                         .eq(DocumentChunkDO::getDocumentId, documentId)
                         .eq(DocumentChunkDO::getIsDeleted, 0)
                         .orderByAsc(DocumentChunkDO::getChunkIndex)
-                        .last("LIMIT 30") // 前30个分块,平衡内容完整性和token限制
         );
 
-        if (chunks.isEmpty()) {
+        if (allChunks.isEmpty()) {
             throw new BusinessException("文档内容为空，无法生成总结");
         }
 
-        log.info("获取到 {} 个分块用于生成总结", chunks.size());
-
-        // 构建上下文
-        StringBuilder contextBuilder = new StringBuilder("论文内容:\n\n");
-        for (DocumentChunkDO chunk : chunks) {
-            contextBuilder.append(chunk.getContent()).append("\n\n");
-        }
+        log.info("获取到 {} 个分块用于生成总结", allChunks.size());
 
         try {
+            // 【策略选择】根据文档长度选择不同的总结策略
+            String contextContent;
+            
+            if (allChunks.size() <= 10) {
+                // 短文档：直接总结（<= 10个chunk，约5000字符）
+                log.debug("使用直接总结策略（短文档）");
+                contextContent = buildDirectContext(allChunks);
+            } else {
+                // 长文档：两阶段总结（> 10个chunk）
+                log.debug("使用两阶段总结策略（长文档，共{}个chunk）", allChunks.size());
+                contextContent = buildTwoStageSummary(allChunks);
+            }
+
             // 使用提示词模板构建完整提示
-            String fullPrompt = paperSummaryPromptTemplate.replace("{context}", contextBuilder.toString());
+            String fullPrompt = paperSummaryPromptTemplate.replace("{context}", contextContent);
 
-            // 增强system message,强调JSON格式
-            String systemMessage = "你是一位资深的学术研究专家，擅长阅读和分析学术论文。\n" +
-                    "【重要】你必须严格返回标准的JSON格式，不要添加任何额外的文字说明或markdown标记。\n" +
-                    "【重要】JSON中的所有字段都必须填写，不能为空。如果某个信息在论文中找不到，请填写合理的默认值或'未提及'。\n" +
-                    "【重要】返回的JSON必须是有效的、可直接解析的格式。";
-
-            log.debug("准备调用LLM生成论文总结, prompt长度: {}", fullPrompt.length());
-
+            // 增强system message,强调JSON格式和内容完整性
+            String systemMessage = """
+                你是一位资深的学术论文分析专家，拥有多年的学术审稿和论文写作经验。
+                
+                核心要求：
+                1. 必须返回完整填充的JSON对象，所有字段都要有实质性内容
+                2. 不允许返回空字符串("")或空数组([])
+                3. 基于论文内容深度分析，每个描述性字段至少200字
+                4. 只返回纯JSON，绝对不要markdown标记（如```json）
+                5. 如果某些信息在文中不明确，请根据上下文合理推断和概括
+                
+                记住：你的目标是生成一份完整、详细、有价值的论文总结，而不是空壳结构！
+                """;
             // 直接调用LLM，不使用QuestionAnswerAdvisor
             String rawResponse = ragChatClient.prompt()
                     .system(systemMessage)
@@ -319,7 +330,12 @@ public class RAGServiceImpl implements RAGService {
                     .content();
 
             // 【关键】详细记录原始响应
-            log.info("===== LLM原始响应 =====");
+            log.info("===== LLM原始响应（完整内容） =====");
+            log.info("响应长度: {} 字符", rawResponse != null ? rawResponse.length() : 0);
+            if (rawResponse != null && rawResponse.length() > 0) {
+                log.info("前500字符:\n{}", rawResponse.substring(0, Math.min(500, rawResponse.length())));
+                log.debug("完整响应:\n{}", rawResponse);
+            }
             if (rawResponse == null || rawResponse.trim().isEmpty()) {
                 log.error("【致命错误】LLM返回空响应! documentId={}", documentId);
                 log.error("请检查: 1) OpenAI API key是否有效 2) 网络连接 3) 模型是否可用 4) Token额度");
@@ -329,18 +345,23 @@ public class RAGServiceImpl implements RAGService {
             // 预处理响应内容
             String cleanedResponse = cleanJsonResponse(rawResponse);
             // 手动解析 JSON 为 PaperSummaryVO
-            PaperSummaryVO summary = null;
+            PaperSummaryVO summary;
             try {
                 summary = objectMapper.readValue(cleanedResponse, PaperSummaryVO.class);
+                if (summary == null) {
+                    throw new BusinessException("LLM返回的总结数据为空");
+                }
                 log.info("✓ JSON解析成功: title={}, authors={}, year={}",
                         summary.getTitle(), 
                         summary.getAuthors() != null ? summary.getAuthors().size() : 0, 
                         summary.getPublicationYear());
+            } catch (BusinessException be) {
+                throw be;
             } catch (Exception parseEx) {
                 log.error("✗ JSON解析失败! 原始响应: {}", rawResponse);
                 log.error("清理后的JSON: {}", cleanedResponse);
                 log.error("解析异常详情", parseEx);
-
+                throw new BusinessException("论文总结JSON解析失败: " + parseEx.getMessage());
             }
 
             // 验证和填充默认值，防止null字段
@@ -354,8 +375,8 @@ public class RAGServiceImpl implements RAGService {
             // 构建引用列表（使用检索到的chunks构建Document列表）
             // 注意：这里的Documents是从数据库直接获取的，不是向量搜索的结果，所以没有相似度分数
             List<Document> retrievedDocs = new ArrayList<>();
-            for (int i = 0; i < chunks.size(); i++) {
-                DocumentChunkDO chunk = chunks.get(i);
+            for (int i = 0; i < allChunks.size(); i++) {
+                DocumentChunkDO chunk = allChunks.get(i);
                 Map<String, Object> metadata = new HashMap<>();
                 metadata.put("documentId", String.valueOf(documentId));
                 metadata.put("chunkIndex", chunk.getChunkIndex());
@@ -902,6 +923,109 @@ public class RAGServiceImpl implements RAGService {
                 })
                 .filter(doc -> doc != null)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 构建直接总结的上下文（适用于短文档）
+     * 直接拼接所有chunk内容，限制总长度
+     */
+    private String buildDirectContext(List<DocumentChunkDO> chunks) {
+        StringBuilder contextBuilder = new StringBuilder("论文完整内容:\n\n");
+        int totalLength = 0;
+        int maxContextLength = 12000; // 短文档允许更长的上下文
+        
+        for (DocumentChunkDO chunk : chunks) {
+            String content = chunk.getContent();
+            
+            // 检查是否超过总长度限制
+            if (totalLength + content.length() > maxContextLength) {
+                log.debug("直接总结上下文达到长度限制，已使用{}个分块", contextBuilder.toString().split("\n\n").length - 1);
+                break;
+            }
+            
+            contextBuilder.append(content).append("\n\n");
+            totalLength += content.length();
+        }
+        
+        log.debug("直接总结上下文构建完成，总长度: {} 字符", totalLength);
+        return contextBuilder.toString();
+    }
+
+    /**
+     * 两阶段总结策略（适用于长文档）
+     * 第一阶段：将文档分批，生成中间总结
+     * 第二阶段：汇总所有中间总结
+     */
+    private String buildTwoStageSummary(List<DocumentChunkDO> allChunks) {
+        log.info("开始两阶段总结，共 {} 个chunk", allChunks.size());
+        
+        // 第一阶段：分批生成中间总结
+        int batchSize = 5; // 每批5个chunk
+        List<String> intermediateSummaries = new ArrayList<>();
+        
+        for (int i = 0; i < allChunks.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, allChunks.size());
+            List<DocumentChunkDO> batch = allChunks.subList(i, end);
+            
+            // 构建本批次的内容
+            StringBuilder batchContent = new StringBuilder();
+            for (DocumentChunkDO chunk : batch) {
+                String content = chunk.getContent();
+                // 限制单个chunk长度
+                if (content.length() > 2000) {
+                    content = content.substring(0, 2000) + "...";
+                }
+                batchContent.append(content).append("\n\n");
+            }
+            
+            // 生成本批次的简要总结
+            String batchSummary = generateIntermediateSummary(batchContent.toString(), i / batchSize + 1);
+            if (batchSummary != null && !batchSummary.isBlank()) {
+                intermediateSummaries.add(batchSummary);
+            }
+            
+            log.debug("完成第 {} 批次总结（chunk {}-{}）", i / batchSize + 1, i, end - 1);
+        }
+        
+        // 第二阶段：汇总所有中间总结
+        StringBuilder finalContext = new StringBuilder("论文分段总结汇总:\n\n");
+        for (int i = 0; i < intermediateSummaries.size(); i++) {
+            finalContext.append("【第 ").append(i + 1).append(" 部分】\n");
+            finalContext.append(intermediateSummaries.get(i)).append("\n\n");
+        }
+        
+        log.info("两阶段总结完成，共生成 {} 个中间总结，汇总长度: {} 字符", 
+                intermediateSummaries.size(), finalContext.length());
+        
+        return finalContext.toString();
+    }
+
+    /**
+     * 生成中间总结（简洁版）
+     */
+    private String generateIntermediateSummary(String content, int batchNumber) {
+        try {
+            String prompt = String.format(
+                "请对以下论文片段（第%d部分）进行简要总结，提取关键信息（200字以内）：\n\n%s\n\n" +
+                "要求：\n" +
+                "1. 只返回纯文本总结，不要JSON格式\n" +
+                "2. 重点关注：研究方法、实验设计、主要发现、创新点\n" +
+                "3. 保持简洁，200字以内",
+                batchNumber, content
+            );
+            
+            String summary = ragChatClient.prompt()
+                    .system("你是论文分析专家，擅长提取关键信息。")
+                    .user(prompt)
+                    .call()
+                    .content();
+            
+            return summary != null ? summary.trim() : "";
+            
+        } catch (Exception e) {
+            log.warn("生成第 {} 批次中间总结失败", batchNumber, e);
+            return "";
+        }
     }
 
     /**
