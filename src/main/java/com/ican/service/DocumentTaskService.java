@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * 文档任务服务接口
  * 
- * @author ican
+ * @author 席崇援
  */
 public interface DocumentTaskService {
     

@@ -18,7 +18,7 @@ import java.util.stream.Collectors;
  * Rerank 服务实现
  * 使用 LLM 对候选文档进行重排序
  * 
- * @author ican
+ * @author 席崇援
  */
 @Slf4j
 @Service

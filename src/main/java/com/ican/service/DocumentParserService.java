@@ -5,8 +5,7 @@ import org.springframework.web.multipart.MultipartFile;
 /**
  * 文档解析服务接口
  * 
- * @author ICan
- * @since 2024-10-06
+ * @author 席崇援
  */
 public interface DocumentParserService {
     

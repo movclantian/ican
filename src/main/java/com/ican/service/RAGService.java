@@ -14,8 +14,7 @@ import java.util.List;
 /**
  * RAG 服务接口
  * 
- * @author ICan
- * @since 2024-10-06
+ * @author 席崇援
  */
 public interface RAGService {
     

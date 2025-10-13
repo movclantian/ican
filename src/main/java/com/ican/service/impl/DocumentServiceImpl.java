@@ -4,7 +4,10 @@ import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.codec.Base62;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.ican.config.RAGConfig;
+import com.ican.model.dto.DocumentQueryDTO;
 import com.ican.model.entity.DocumentChunkDO;
 import com.ican.model.entity.DocumentDO;
 import com.ican.model.entity.DocumentVectorDO;
@@ -42,8 +45,7 @@ import java.util.stream.Collectors;
 /**
  * 文档服务实现类
  * 
- * @author ICan
- * @since 2024-10-06
+ * @author 席崇援
  */
 @Slf4j
 @Service
@@ -131,19 +133,73 @@ public class DocumentServiceImpl implements DocumentService {
     }
     
     @Override
-    public List<DocumentVO> getUserDocuments(Long userId, String type) {
-        LambdaQueryWrapper<DocumentDO> wrapper = new LambdaQueryWrapper<>();
-     wrapper.eq(DocumentDO::getUserId, userId)
-         .eq(DocumentDO::getIsDeleted, 0);
+    public IPage<DocumentVO> pageUserDocuments(Long userId, DocumentQueryDTO queryDTO) {
+        // 创建分页对象
+        Page<DocumentDO> page = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
         
-        if (StrUtil.isNotBlank(type)) {
-            wrapper.eq(DocumentDO::getType, type);
+        // 构建查询条件
+        LambdaQueryWrapper<DocumentDO> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(DocumentDO::getUserId, userId)
+               .eq(DocumentDO::getIsDeleted, 0);
+        
+        // 标题模糊查询
+        if (StrUtil.isNotBlank(queryDTO.getTitle())) {
+            wrapper.like(DocumentDO::getTitle, queryDTO.getTitle());
         }
         
-        wrapper.orderByDesc(DocumentDO::getCreateTime);
+        // 类型过滤
+        if (StrUtil.isNotBlank(queryDTO.getType())) {
+            wrapper.eq(DocumentDO::getType, queryDTO.getType());
+        }
         
-        List<DocumentDO> documents = documentMapper.selectList(wrapper);
-        return documents.stream().map(this::convertToVO).collect(Collectors.toList());
+        // 状态过滤
+        if (StrUtil.isNotBlank(queryDTO.getStatus())) {
+            wrapper.eq(DocumentDO::getStatus, queryDTO.getStatus());
+        }
+        
+        // 知识库ID过滤
+        if (queryDTO.getKbId() != null) {
+            wrapper.eq(DocumentDO::getKbId, queryDTO.getKbId());
+        }
+        
+        // 排序
+        String sortField = queryDTO.getSortField();
+        String sortOrder = queryDTO.getSortOrder();
+        if (StrUtil.isNotBlank(sortField)) {
+            if ("desc".equalsIgnoreCase(sortOrder)) {
+                wrapper.orderByDesc(getColumnByField(sortField));
+            } else {
+                wrapper.orderByAsc(getColumnByField(sortField));
+            }
+        } else {
+            // 默认按创建时间降序
+            wrapper.orderByDesc(DocumentDO::getCreateTime);
+        }
+        
+        // 执行分页查询
+        IPage<DocumentDO> documentPage = documentMapper.selectPage(page, wrapper);
+        
+        // 转换为 VO
+        IPage<DocumentVO> voPage = new Page<>(documentPage.getCurrent(), documentPage.getSize(), documentPage.getTotal());
+        voPage.setRecords(documentPage.getRecords().stream()
+                .map(this::convertToVO)
+                .collect(Collectors.toList()));
+        
+        return voPage;
+    }
+    
+    /**
+     * 根据字段名获取列函数（用于动态排序）
+     */
+    private com.baomidou.mybatisplus.core.toolkit.support.SFunction<DocumentDO, ?> getColumnByField(String field) {
+        return switch (field) {
+            case "title" -> DocumentDO::getTitle;
+            case "type" -> DocumentDO::getType;
+            case "status" -> DocumentDO::getStatus;
+            case "fileSize" -> DocumentDO::getFileSize;
+            case "updateTime" -> DocumentDO::getUpdateTime;
+            default -> DocumentDO::getCreateTime;
+        };
     }
     
     @Override
@@ -403,11 +459,7 @@ public class DocumentServiceImpl implements DocumentService {
                 log.error("从向量库删除文档失败: documentId={}", documentId, e);
                 // 向量删除失败不影响数据库删除
             }
-            
-            // 2. 逻辑删除文档记录（保持与 @TableLogic 一致）
-            document.setIsDeleted(1);
-            document.setUpdateTime(LocalDateTime.now());
-            documentMapper.updateById(document);
+            documentMapper.deleteById(documentId);
             log.info("逻辑删除文档: documentId={}", documentId);
             
             // 3. 从文件存储删除

@@ -5,7 +5,7 @@ import org.springframework.ai.vectorstore.SearchRequest;
 /**
  * 动态检索策略服务
  * 
- * @author ican
+ * @author 席崇援
  */
 public interface DynamicRetrievalService {
     

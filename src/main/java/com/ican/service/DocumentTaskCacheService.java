@@ -4,7 +4,7 @@ package com.ican.service;
  * 文档任务缓存服务接口
  * 使用Redis存储实时任务状态，减轻MySQL压力
  * 
- * @author ican
+ * @author 席崇援
  */
 public interface DocumentTaskCacheService {
     

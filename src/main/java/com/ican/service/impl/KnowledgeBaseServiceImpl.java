@@ -1,9 +1,14 @@
 package com.ican.service.impl;
 
 import cn.dev33.satoken.stp.StpUtil;
+import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.ican.mapper.*;
 import com.ican.model.dto.CreateKBDTO;
+import com.ican.model.dto.KnowledgeBaseQueryDTO;
+import com.ican.model.dto.TagQueryDTO;
 import com.ican.model.entity.*;
 import com.ican.model.vo.TagVO;
 import com.ican.service.KnowledgeBaseService;
@@ -14,13 +19,14 @@ import org.springframework.transaction.annotation.Transactional;
 import top.continew.starter.core.exception.BusinessException;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
 /**
  * 知识库服务实现
  * 
- * @author ican
+ * @author 席崇援
  */
 @Slf4j
 @Service
@@ -54,13 +60,53 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     }
     
     @Override
-    public List<KnowledgeBaseDO> getUserKnowledgeBases(Long userId) {
-        return knowledgeBaseMapper.selectList(
-            new LambdaQueryWrapper<KnowledgeBaseDO>()
-                .eq(KnowledgeBaseDO::getUserId, userId)
-                .eq(KnowledgeBaseDO::getIsDeleted, 0)
-                .orderByDesc(KnowledgeBaseDO::getUpdateTime)
-        );
+    public IPage<KnowledgeBaseDO> pageUserKnowledgeBases(Long userId, KnowledgeBaseQueryDTO queryDTO) {
+        // 创建分页对象
+        Page<KnowledgeBaseDO> page = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+        
+        // 构建查询条件
+        LambdaQueryWrapper<KnowledgeBaseDO> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(KnowledgeBaseDO::getUserId, userId)
+               .eq(KnowledgeBaseDO::getIsDeleted, 0);
+        
+        // 名称模糊查询
+        if (StrUtil.isNotBlank(queryDTO.getName())) {
+            wrapper.like(KnowledgeBaseDO::getName, queryDTO.getName());
+        }
+        
+        // 描述模糊查询
+        if (StrUtil.isNotBlank(queryDTO.getDescription())) {
+            wrapper.like(KnowledgeBaseDO::getDescription, queryDTO.getDescription());
+        }
+        
+        // 排序
+        String sortField = queryDTO.getSortField();
+        String sortOrder = queryDTO.getSortOrder();
+        if (StrUtil.isNotBlank(sortField)) {
+            if ("desc".equalsIgnoreCase(sortOrder)) {
+                wrapper.orderByDesc(getKBColumnByField(sortField));
+            } else {
+                wrapper.orderByAsc(getKBColumnByField(sortField));
+            }
+        } else {
+            // 默认按更新时间降序
+            wrapper.orderByDesc(KnowledgeBaseDO::getUpdateTime);
+        }
+        
+        // 执行分页查询
+        return knowledgeBaseMapper.selectPage(page, wrapper);
+    }
+    
+    /**
+     * 根据字段名获取知识库列函数（用于动态排序）
+     */
+    private com.baomidou.mybatisplus.core.toolkit.support.SFunction<KnowledgeBaseDO, ?> getKBColumnByField(String field) {
+        return switch (field) {
+            case "name" -> KnowledgeBaseDO::getName;
+            case "documentCount" -> KnowledgeBaseDO::getDocumentCount;
+            case "createTime" -> KnowledgeBaseDO::getCreateTime;
+            default -> KnowledgeBaseDO::getUpdateTime;
+        };
     }
     
     @Override
@@ -126,34 +172,72 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void archiveDocument(Long documentId, Long kbId) {
+    public void batchArchiveDocuments(List<Long> documentIds, Long kbId) {
         Long userId = StpUtil.getLoginIdAsLong();
         
-        // 验证文档所有权
-        DocumentDO document = documentMapper.selectById(documentId);
-        if (document == null) {
-            throw new BusinessException("文档不存在");
-        }
-        if (!document.getUserId().equals(userId)) {
-            throw new BusinessException("无权归档该文档");
+        if (documentIds == null || documentIds.isEmpty()) {
+            throw new BusinessException("文档ID列表不能为空");
         }
         
         // 验证知识库所有权
         KnowledgeBaseDO kb = knowledgeBaseMapper.selectById(kbId);
-        if (kb == null || !kb.getUserId().equals(userId)) {
+        if (kb == null || kb.getIsDeleted() == 1) {
+            throw new BusinessException("知识库不存在");
+        }
+        if (!kb.getUserId().equals(userId)) {
             throw new BusinessException("无权向该知识库添加文档");
         }
         
-        // 关联文档到知识库
-        document.setKbId(kbId);
-        documentMapper.updateById(document);
+        int successCount = 0;
+        List<String> errors = new ArrayList<>();
+        
+        // 批量处理文档
+        for (Long documentId : documentIds) {
+            try {
+                // 验证文档所有权
+                DocumentDO document = documentMapper.selectById(documentId);
+                if (document == null) {
+                    errors.add("文档 " + documentId + " 不存在");
+                    continue;
+                }
+                if (document.getIsDeleted() != null && document.getIsDeleted() == 1) {
+                    errors.add("文档 " + documentId + " 已被删除");
+                    continue;
+                }
+                if (!document.getUserId().equals(userId)) {
+                    errors.add("文档 " + documentId + " 无权归档");
+                    continue;
+                }
+                
+                // 关联文档到知识库
+                document.setKbId(kbId);
+                document.setUpdateTime(LocalDateTime.now());
+                documentMapper.updateById(document);
+                
+                successCount++;
+                log.info("文档归档成功: documentId={}, kbId={}", documentId, kbId);
+                
+            } catch (Exception e) {
+                log.error("归档文档失败: documentId={}, kbId={}", documentId, kbId, e);
+                errors.add("文档 " + documentId + ": " + e.getMessage());
+            }
+        }
         
         // 更新知识库文档数量
-        kb.setDocumentCount(kb.getDocumentCount() + 1);
-        kb.setUpdateTime(LocalDateTime.now());
-        knowledgeBaseMapper.updateById(kb);
+        if (successCount > 0) {
+            kb.setDocumentCount(kb.getDocumentCount() + successCount);
+            kb.setUpdateTime(LocalDateTime.now());
+            knowledgeBaseMapper.updateById(kb);
+        }
         
-        log.info("文档归档成功: documentId={}, kbId={}", documentId, kbId);
+        log.info("批量归档完成: total={}, success={}, failed={}", 
+            documentIds.size(), successCount, documentIds.size() - successCount);
+        
+        if (!errors.isEmpty() && successCount == 0) {
+            throw new BusinessException("所有文档归档失败: " + String.join("; ", errors));
+        } else if (!errors.isEmpty()) {
+            log.warn("部分文档归档失败: {}", String.join("; ", errors));
+        }
     }
     
     @Override
@@ -186,30 +270,73 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     }
     
     @Override
-    public List<TagVO> getUserTags(Long userId) {
-        List<TagDO> tags = tagMapper.selectList(
-            new LambdaQueryWrapper<TagDO>()
-                .eq(TagDO::getUserId, userId)
-                .orderByDesc(TagDO::getCreateTime)
-        );
+    public IPage<TagVO> pageUserTags(Long userId, TagQueryDTO queryDTO) {
+        // 创建分页对象
+        Page<TagDO> page = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
         
-        return tags.stream()
-            .map(tag -> {
-                // 统计使用次数
-                int usageCount = documentTagMapper.selectCount(
-                    new LambdaQueryWrapper<DocumentTagDO>()
-                        .eq(DocumentTagDO::getTagId, tag.getId())
-                ).intValue();
-                
-                return TagVO.builder()
-                    .id(tag.getId())
-                    .name(tag.getName())
-                    .color(tag.getColor())
-                    .usageCount(usageCount)
-                    .createTime(tag.getCreateTime())
-                    .build();
-            })
-            .collect(Collectors.toList());
+        // 构建查询条件
+        LambdaQueryWrapper<TagDO> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(TagDO::getUserId, userId);
+        
+        // 名称模糊查询
+        if (StrUtil.isNotBlank(queryDTO.getName())) {
+            wrapper.like(TagDO::getName, queryDTO.getName());
+        }
+        
+        // 颜色过滤
+        if (StrUtil.isNotBlank(queryDTO.getColor())) {
+            wrapper.eq(TagDO::getColor, queryDTO.getColor());
+        }
+        
+        // 排序
+        String sortField = queryDTO.getSortField();
+        String sortOrder = queryDTO.getSortOrder();
+        if (StrUtil.isNotBlank(sortField)) {
+            if ("desc".equalsIgnoreCase(sortOrder)) {
+                wrapper.orderByDesc(getTagColumnByField(sortField));
+            } else {
+                wrapper.orderByAsc(getTagColumnByField(sortField));
+            }
+        } else {
+            // 默认按创建时间降序
+            wrapper.orderByDesc(TagDO::getCreateTime);
+        }
+        
+        // 执行分页查询
+        IPage<TagDO> tagPage = tagMapper.selectPage(page, wrapper);
+        
+        // 转换为 VO（包含使用次数统计）
+        IPage<TagVO> voPage = new Page<>(tagPage.getCurrent(), tagPage.getSize(), tagPage.getTotal());
+        voPage.setRecords(tagPage.getRecords().stream()
+                .map(tag -> {
+                    // 统计使用次数
+                    int usageCount = documentTagMapper.selectCount(
+                        new LambdaQueryWrapper<DocumentTagDO>()
+                            .eq(DocumentTagDO::getTagId, tag.getId())
+                    ).intValue();
+                    
+                    return TagVO.builder()
+                        .id(tag.getId())
+                        .name(tag.getName())
+                        .color(tag.getColor())
+                        .usageCount(usageCount)
+                        .createTime(tag.getCreateTime())
+                        .build();
+                })
+                .collect(Collectors.toList()));
+        
+        return voPage;
+    }
+    
+    /**
+     * 根据字段名获取标签列函数（用于动态排序）
+     */
+    private com.baomidou.mybatisplus.core.toolkit.support.SFunction<TagDO, ?> getTagColumnByField(String field) {
+        return switch (field) {
+            case "name" -> TagDO::getName;
+            case "color" -> TagDO::getColor;
+            default -> TagDO::getCreateTime;
+        };
     }
     
     @Override

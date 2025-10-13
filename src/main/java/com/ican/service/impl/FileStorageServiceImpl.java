@@ -19,8 +19,7 @@ import java.nio.file.StandardCopyOption;
  * 文件存储服务实现 - 本地存储版本
  * 后续可替换为 MinIO 实现
  * 
- * @author ICan
- * @since 2024-10-06
+ * @author 席崇援
  */
 @Slf4j
 @Service

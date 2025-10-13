@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
 /**
  * 引用格式服务实现
  * 
- * @author ican
+ * @author 席崇援
  */
 @Slf4j
 @Service

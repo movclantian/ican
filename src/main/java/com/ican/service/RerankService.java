@@ -6,7 +6,7 @@ import java.util.Map;
 /**
  * Rerank 服务接口
  * 
- * @author ican
+ * @author 席崇援
  */
 public interface RerankService {
     

@@ -1,6 +1,9 @@
 package com.ican.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.ican.model.dto.CreateKBDTO;
+import com.ican.model.dto.KnowledgeBaseQueryDTO;
+import com.ican.model.dto.TagQueryDTO;
 import com.ican.model.entity.KnowledgeBaseDO;
 import com.ican.model.vo.TagVO;
 
@@ -9,7 +12,7 @@ import java.util.List;
 /**
  * 知识库服务接口
  * 
- * @author ican
+ * @author 席崇援
  */
 public interface KnowledgeBaseService {
     
@@ -22,12 +25,13 @@ public interface KnowledgeBaseService {
     Long createKnowledgeBase(CreateKBDTO createKBDTO);
     
     /**
-     * 获取用户的知识库列表
+     * 分页查询用户的知识库列表
      * 
      * @param userId 用户ID
-     * @return 知识库列表
+     * @param queryDTO 查询条件
+     * @return 分页结果
      */
-    List<KnowledgeBaseDO> getUserKnowledgeBases(Long userId);
+    IPage<KnowledgeBaseDO> pageUserKnowledgeBases(Long userId, KnowledgeBaseQueryDTO queryDTO);
     
     /**
      * 获取知识库详情
@@ -53,12 +57,12 @@ public interface KnowledgeBaseService {
     void deleteKnowledgeBase(Long kbId);
     
     /**
-     * 将文档归档到知识库
+     * 批量将文档归档到知识库
      * 
-     * @param documentId 文档ID
+     * @param documentIds 文档ID列表
      * @param kbId 知识库ID
      */
-    void archiveDocument(Long documentId, Long kbId);
+    void batchArchiveDocuments(List<Long> documentIds, Long kbId);
     
     /**
      * 创建标签
@@ -70,12 +74,13 @@ public interface KnowledgeBaseService {
     Long createTag(String name, String color);
     
     /**
-     * 获取用户的标签列表
+     * 分页查询用户的标签列表
      * 
      * @param userId 用户ID
-     * @return 标签列表
+     * @param queryDTO 查询条件
+     * @return 分页结果
      */
-    List<TagVO> getUserTags(Long userId);
+    IPage<TagVO> pageUserTags(Long userId, TagQueryDTO queryDTO);
     
     /**
      * 为文档添加标签

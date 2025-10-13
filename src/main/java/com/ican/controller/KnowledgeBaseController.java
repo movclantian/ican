@@ -1,7 +1,10 @@
 package com.ican.controller;
 
 import cn.dev33.satoken.stp.StpUtil;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.ican.model.dto.CreateKBDTO;
+import com.ican.model.dto.KnowledgeBaseQueryDTO;
+import com.ican.model.dto.TagQueryDTO;
 import com.ican.model.entity.KnowledgeBaseDO;
 import com.ican.model.vo.TagVO;
 import com.ican.service.KnowledgeBaseService;
@@ -32,11 +35,11 @@ public class KnowledgeBaseController {
         return knowledgeBaseService.createKnowledgeBase(createKBDTO);
     }
     
-    @Operation(summary = "获取我的知识库列表")
+    @Operation(summary = "分页查询我的知识库列表", description = "支持按名称、描述搜索，支持分页和排序")
     @GetMapping("/my")
-    public List<KnowledgeBaseDO> getMyKnowledgeBases() {
+    public IPage<KnowledgeBaseDO> getMyKnowledgeBases(KnowledgeBaseQueryDTO queryDTO) {
         Long userId = StpUtil.getLoginIdAsLong();
-        return knowledgeBaseService.getUserKnowledgeBases(userId);
+        return knowledgeBaseService.pageUserKnowledgeBases(userId, queryDTO);
     }
     
     @Operation(summary = "获取知识库详情")
@@ -61,12 +64,12 @@ public class KnowledgeBaseController {
         knowledgeBaseService.deleteKnowledgeBase(kbId);
     }
     
-    @Operation(summary = "将文档归档到知识库")
-    @PostMapping("/{kbId}/documents/{documentId}")
-    public void archiveDocument(
+    @Operation(summary = "批量将文档归档到知识库")
+    @PostMapping("/{kbId}/documents/batch")
+    public void batchArchiveDocuments(
             @Parameter(description = "知识库ID") @PathVariable Long kbId,
-            @Parameter(description = "文档ID") @PathVariable Long documentId) {
-        knowledgeBaseService.archiveDocument(documentId, kbId);
+            @Parameter(description = "文档ID列表") @RequestBody List<Long> documentIds) {
+        knowledgeBaseService.batchArchiveDocuments(documentIds, kbId);
     }
     
     @Operation(summary = "创建标签")
@@ -77,11 +80,11 @@ public class KnowledgeBaseController {
         return knowledgeBaseService.createTag(name, color);
     }
     
-    @Operation(summary = "获取我的标签列表")
+    @Operation(summary = "分页查询我的标签列表", description = "支持按名称、颜色搜索，支持分页和排序")
     @GetMapping("/tags/my")
-    public List<TagVO> getMyTags() {
+    public IPage<TagVO> getMyTags(TagQueryDTO queryDTO) {
         Long userId = StpUtil.getLoginIdAsLong();
-        return knowledgeBaseService.getUserTags(userId);
+        return knowledgeBaseService.pageUserTags(userId, queryDTO);
     }
     
     @Operation(summary = "为文档添加标签")

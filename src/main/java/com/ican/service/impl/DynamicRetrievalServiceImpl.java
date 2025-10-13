@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  * 动态检索策略服务实现
  * 基于问题长度、类型动态调整 topK 和相似度阈值
  * 
- * @author ican
+ * @author 席崇援
  */
 @Slf4j
 @Service

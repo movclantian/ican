@@ -9,8 +9,7 @@ import jakarta.servlet.http.HttpServletRequest;
 /**
  * 认证服务接口
  *
- * @author ICan
- * @since 2024-10-03
+ * @author 席崇援
  */
 public interface AuthService {
 

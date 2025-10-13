@@ -10,8 +10,7 @@ import org.springframework.stereotype.Component;
 /**
  * 文档处理生产者
  * 
- * @author ICan
- * @since 2024-10-06
+ * @author 席崇援
  */
 @Slf4j
 @Component

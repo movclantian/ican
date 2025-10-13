@@ -52,8 +52,7 @@ import java.util.stream.Collectors;
 /**
  * RAG 服务实现类
  *
- * @author ICan
- * @since 2024-10-06
+ * @author 席崇援
  */
 @Slf4j
 @Service

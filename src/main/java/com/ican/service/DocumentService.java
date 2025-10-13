@@ -1,5 +1,7 @@
 package com.ican.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.ican.model.dto.DocumentQueryDTO;
 import com.ican.model.vo.DocumentFileVO;
 import com.ican.model.vo.DocumentVO;
 import org.springframework.ai.document.Document;
@@ -10,8 +12,7 @@ import java.util.List;
 /**
  * 文档服务接口
  * 
- * @author ICan
- * @since 2024-10-06
+ * @author 席崇援
  */
 public interface DocumentService {
     
@@ -26,13 +27,13 @@ public interface DocumentService {
     Long uploadDocument(MultipartFile file, String type, Long userId);
     
     /**
-     * 获取用户的文档列表
+     * 分页查询用户的文档列表
      * 
      * @param userId 用户ID
-     * @param type 文档类型(可选)
-     * @return 文档列表
+     * @param queryDTO 查询条件
+     * @return 分页结果
      */
-    List<DocumentVO> getUserDocuments(Long userId, String type);
+    IPage<DocumentVO> pageUserDocuments(Long userId, DocumentQueryDTO queryDTO);
     
     /**
      * 获取文档详情

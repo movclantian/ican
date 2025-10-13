@@ -11,8 +11,7 @@ import java.time.LocalDateTime;
 /**
  * 教学设计列表 VO
  * 
- * @author ICan
- * @since 2024-10-08
+ * @author 席崇援
  */
 @Data
 @Builder

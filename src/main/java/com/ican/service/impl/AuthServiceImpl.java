@@ -32,8 +32,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * 认证服务实现类
  *
- * @author ICan
- * @since 2024-10-03
+ * @author 席崇援
  */
 @Slf4j
 @Service

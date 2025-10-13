@@ -2,6 +2,8 @@ package com.ican.controller;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.dev33.satoken.stp.StpUtil;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.ican.model.dto.DocumentQueryDTO;
 import com.ican.model.vo.DocumentFileVO;
 import com.ican.model.vo.DocumentVO;
 import com.ican.service.DocumentService;
@@ -100,18 +102,16 @@ public class DocumentController {
     }
     
     /**
-     * 获取用户的文档列表
+     * 分页查询用户的文档列表
      * 
-     * @param type 文档类型(可选)
-     * @return 文档列表
+     * @param queryDTO 查询参数
+     * @return 分页结果
      */
-    @Operation(summary = "获取文档列表", description = "获取当前用户上传的所有文档；可选按类型过滤")
+    @Operation(summary = "分页查询文档列表", description = "支持按标题、类型、状态、知识库等条件查询，支持分页和排序")
     @GetMapping("/list")
-    public List<DocumentVO> getUserDocuments(
-            @Parameter(description = "文档类型") @RequestParam(required = false) String type) {
-        
+    public IPage<DocumentVO> getUserDocuments(DocumentQueryDTO queryDTO) {
         Long userId = StpUtil.getLoginIdAsLong();
-        return documentService.getUserDocuments(userId, type);
+        return documentService.pageUserDocuments(userId, queryDTO);
     }
     
     /**
