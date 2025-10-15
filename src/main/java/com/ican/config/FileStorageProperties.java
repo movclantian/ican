@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Configuration;
 /**
  * 文件存储配置
  * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-07
  */
 @Data

@@ -1,8 +1,8 @@
-package com.ican.service.impl;
+﻿package com.ican.service.impl;
 
 import com.ican.model.vo.PaperMetadataVO;
 import com.ican.service.CitationFormatService;
-import com.ican.service.RAGService;
+import com.ican.service.PaperAnalysisService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,9 +20,9 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class CitationFormatServiceImpl implements CitationFormatService {
-    
-    private final RAGService ragService;
-    
+
+    private final PaperAnalysisService paperAnalysisService;
+
     @Override
     public String generateBibTeX(PaperMetadataVO metadata) {
         if (metadata == null) {
@@ -247,7 +247,7 @@ public class CitationFormatServiceImpl implements CitationFormatService {
         return documentIds.stream()
             .map(documentId -> {
                 try {
-                    PaperMetadataVO metadata = ragService.extractPaperMetadata(documentId);
+                    PaperMetadataVO metadata = paperAnalysisService.extractPaperMetadata(documentId);
                     return formatCitation(metadata, format);
                 } catch (Exception e) {
                     log.error("导出引用失败: documentId={}", documentId, e);

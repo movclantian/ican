@@ -9,7 +9,7 @@ import lombok.NoArgsConstructor;
  * 文档文件 VO
  * 用于文档预览和下载
  * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-09
  */
 @Data

@@ -2,28 +2,30 @@ package com.ican.service.impl;
 
 import com.ican.service.DocumentParserService;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.tika.Tika;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import top.continew.starter.core.exception.BusinessException;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 
 /**
  * 文档解析服务实现
+ * 使用 Apache Tika 自动检测和解析多种文档格式
  * 
  * @author 席崇援
  */
 @Slf4j
 @Service
 public class DocumentParserServiceImpl implements DocumentParserService {
+
+    private final Tika tika = new Tika();
     
+    /**
+     * 解析文档（自动检测格式）
+     * 使用 Tika 自动识别文件类型并解析
+     */
     @Override
     public String parseDocument(MultipartFile file) {
         if (file == null || file.isEmpty()) {
@@ -35,123 +37,58 @@ public class DocumentParserServiceImpl implements DocumentParserService {
             throw new BusinessException("文件名不能为空");
         }
         
-        // 检查是否有扩展名
-        int lastDotIndex = filename.lastIndexOf(".");
-        if (lastDotIndex == -1 || lastDotIndex == filename.length() - 1) {
-            throw new BusinessException("文件缺少扩展名");
+        try {
+            log.info("开始解析文档: {}", filename);
+            
+            // 使用 Tika 自动检测并解析
+            String text = tika.parseToString(file.getInputStream());
+            
+            // 清理文本
+            text = cleanText(text);
+            
+            log.info("文档解析完成: {}, 字符数={}", filename, text.length());
+            return text;
+            
+        } catch (Exception e) {
+            log.error("文档解析失败: {}", filename, e);
+            throw new BusinessException("文档解析失败: " + e.getMessage());
         }
-        
-        String extension = filename.substring(lastDotIndex + 1).toLowerCase();
-        
-        return switch (extension) {
-            case "pdf" -> parsePDF(file);
-            case "docx", "doc" -> parseWord(file);
-            case "md", "markdown" -> parseMarkdown(file);
-            case "txt" -> parseText(file);
-            default -> throw new BusinessException("不支持的文件格式: " + extension);
-        };
     }
     
+    /**
+     * 解析 PDF 文档
+     * 使用 Tika 自动解析
+     */
     @Override
     public String parsePDF(MultipartFile file) {
-        try {
-            log.info("开始解析PDF: {}", file.getOriginalFilename());
-            
-            try (PDDocument document = Loader.loadPDF(file.getBytes())) {
-                PDFTextStripper stripper = new PDFTextStripper();
-                
-                // 设置排序
-                stripper.setSortByPosition(true);
-                
-                String text = stripper.getText(document);
-                
-                // 清理文本
-                text = cleanText(text);
-                
-                log.info("PDF解析完成: {}, 字符数={}", file.getOriginalFilename(), text.length());
-                return text;
-            }
-        } catch (Exception e) {
-            log.error("PDF解析失败: {}", file.getOriginalFilename(), e);
-            throw new BusinessException("PDF解析失败: " + e.getMessage());
-        }
+        return parseDocument(file);
     }
     
+    /**
+     * 解析 Word 文档
+     * 使用 Tika 自动解析
+     */
     @Override
     public String parseWord(MultipartFile file) {
-        try {
-            log.info("开始解析Word: {}", file.getOriginalFilename());
-            
-            try (XWPFDocument document = new XWPFDocument(file.getInputStream())) {
-                StringBuilder text = new StringBuilder();
-                
-                // 提取所有段落
-                for (XWPFParagraph paragraph : document.getParagraphs()) {
-                    String paragraphText = paragraph.getText();
-                    if (paragraphText != null && !paragraphText.trim().isEmpty()) {
-                        text.append(paragraphText).append("\n");
-                    }
-                }
-                
-                String result = cleanText(text.toString());
-                
-                log.info("Word解析完成: {}, 字符数={}", file.getOriginalFilename(), result.length());
-                return result;
-            }
-        } catch (Exception e) {
-            log.error("Word解析失败: {}", file.getOriginalFilename(), e);
-            throw new BusinessException("Word解析失败: " + e.getMessage());
-        }
+        return parseDocument(file);
     }
     
+    /**
+     * 解析 Markdown 文档
+     * 使用 Tika 自动解析
+     */
     @Override
     public String parseMarkdown(MultipartFile file) {
-        try {
-            log.info("开始解析Markdown: {}", file.getOriginalFilename());
-            
-            StringBuilder text = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8)
-            )) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    text.append(line).append("\n");
-                }
-            }
-            
-            String result = text.toString();
-            
-            log.info("Markdown解析完成: {}, 字符数={}", file.getOriginalFilename(), result.length());
-            return result;
-        } catch (Exception e) {
-            log.error("Markdown解析失败: {}", file.getOriginalFilename(), e);
-            throw new BusinessException("Markdown解析失败: " + e.getMessage());
-        }
+        return parseDocument(file);
     }
     
+    /**
+     * 解析文本文档
+     * 使用 Tika 自动解析
+     */
     @Override
     public String parseText(MultipartFile file) {
-        try {
-            log.info("开始解析文本: {}", file.getOriginalFilename());
-            
-            StringBuilder text = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8)
-            )) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    text.append(line).append("\n");
-                }
-            }
-            
-            String result = text.toString();
-            
-            log.info("文本解析完成: {}, 字符数={}", file.getOriginalFilename(), result.length());
-            return result;
-        } catch (Exception e) {
-            log.error("文本解析失败: {}", file.getOriginalFilename(), e);
-            throw new BusinessException("文本解析失败: " + e.getMessage());
-        }
+        return parseDocument(file);
     }
     
     /**
@@ -180,82 +117,64 @@ public class DocumentParserServiceImpl implements DocumentParserService {
             .trim();
     }
     
+    /**
+     * 从字节数组解析 PDF
+     * 使用 Tika 自动解析
+     */
     @Override
     public String parsePDFFromBytes(byte[] fileData) {
-        try {
-            log.info("开始从字节数组解析PDF, 大小={} bytes", fileData.length);
-            
-            PDDocument document = Loader.loadPDF(fileData);
-            PDFTextStripper stripper = new PDFTextStripper();
-            stripper.setSortByPosition(true);
-            
-            String text = stripper.getText(document);
-            document.close();
-            
-            text = cleanText(text);
-            
-            log.info("PDF解析完成, 字符数={}", text.length());
-            return text;
-        } catch (Exception e) {
-            log.error("PDF字节数组解析失败", e);
-            throw new BusinessException("PDF解析失败: " + e.getMessage());
-        }
+        return parseFromBytes(fileData, "application/pdf");
     }
     
+    /**
+     * 从字节数组解析 Word
+     * 使用 Tika 自动解析
+     */
     @Override
     public String parseWordFromBytes(byte[] fileData) {
-        try {
-            log.info("开始从字节数组解析Word, 大小={} bytes", fileData.length);
-            
-            XWPFDocument document = new XWPFDocument(new java.io.ByteArrayInputStream(fileData));
-            StringBuilder text = new StringBuilder();
-            
-            for (XWPFParagraph paragraph : document.getParagraphs()) {
-                String paragraphText = paragraph.getText();
-                if (paragraphText != null && !paragraphText.trim().isEmpty()) {
-                    text.append(paragraphText).append("\n");
-                }
-            }
-            
-            document.close();
-            
-            String result = cleanText(text.toString());
-            
-            log.info("Word解析完成, 字符数={}", result.length());
-            return result;
-        } catch (Exception e) {
-            log.error("Word字节数组解析失败", e);
-            throw new BusinessException("Word解析失败: " + e.getMessage());
-        }
+        return parseFromBytes(fileData, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     }
     
+    /**
+     * 从字节数组解析文本
+     * 使用 Tika 自动解析
+     */
     @Override
     public String parseTextFromBytes(byte[] fileData) {
-        try {
-            log.info("开始从字节数组解析文本, 大小={} bytes", fileData.length);
-            
-            String text = new String(fileData, StandardCharsets.UTF_8);
-            
-            log.info("文本解析完成, 字符数={}", text.length());
-            return text;
-        } catch (Exception e) {
-            log.error("文本字节数组解析失败", e);
-            throw new BusinessException("文本解析失败: " + e.getMessage());
-        }
+        return parseFromBytes(fileData, "text/plain");
     }
     
+    /**
+     * 从字节数组解析 Markdown
+     * 使用 Tika 自动解析
+     */
     @Override
     public String parseMarkdownFromBytes(byte[] fileData) {
+        return parseFromBytes(fileData, "text/markdown");
+    }
+
+    /**
+     * 通用字节数组解析方法
+     * 使用 Tika 自动检测并解析
+     *
+     * @param fileData 文件字节数组
+     * @param mimeType 文件 MIME 类型（可选，用于提示）
+     * @return 解析后的文本
+     */
+    private String parseFromBytes(byte[] fileData, String mimeType) {
         try {
-            log.info("开始从字节数组解析Markdown, 大小={} bytes", fileData.length);
+            log.info("开始从字节数组解析文档, 大小={} bytes, MIME={}", fileData.length, mimeType);
             
-            String text = new String(fileData, StandardCharsets.UTF_8);
-            
-            log.info("Markdown解析完成, 字符数={}", text.length());
-            return text;
+            try (InputStream inputStream = new ByteArrayInputStream(fileData)) {
+                String text = tika.parseToString(inputStream);
+                text = cleanText(text);
+                
+                log.info("文档解析完成, 字符数={}", text.length());
+                return text;
+            }
         } catch (Exception e) {
-            log.error("Markdown字节数组解析失败", e);
-            throw new BusinessException("Markdown解析失败: " + e.getMessage());
+            log.error("文档字节数组解析失败", e);
+            throw new BusinessException("文档解析失败: " + e.getMessage());
         }
     }
 }

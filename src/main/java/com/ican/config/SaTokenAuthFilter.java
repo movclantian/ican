@@ -16,7 +16,7 @@ import java.util.*;
  * Sa-Token 认证过滤器
  * 用于处理 Bearer Token 格式,将 "Bearer <token>" 转换为 Sa-Token 期望的格式
  *
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-07
  */
 @Slf4j

@@ -14,7 +14,7 @@ import java.time.LocalDateTime;
  * 文档向量ID映射实体
  * 用于记录文档分块的向量ID，便于删除向量
  * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-08
  */
 @Data

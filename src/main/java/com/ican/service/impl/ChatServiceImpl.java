@@ -62,7 +62,7 @@ public class ChatServiceImpl implements ChatService {
     @Value("${chat.async-title-generation}")
     private Boolean asyncTitleGeneration;
     
-    @Value("${rag.hybrid-search.vector-similarity-threshold}")
+    @Value("${search.retrieval.similarity-threshold}")
     private Double defaultSimilarityThreshold;
 
 
@@ -152,7 +152,6 @@ public class ChatServiceImpl implements ChatService {
         messages.add(userMsg);
         Prompt prompt = new Prompt(messages, customOptions);
         String aiText = normalChatClient.prompt(prompt)
-                .messages(messages)
                 .call()
                 .content();
 
@@ -204,13 +203,12 @@ public class ChatServiceImpl implements ChatService {
             log.debug("RAG对话 - 跳过历史消息加载: conversationId={}", conversationId);
         }
         
-        messages.add(new UserMessage(userMessage));
+        // 添加用户当前消息
         messages.add(new UserMessage(userMessage));
 
         Prompt prompt = new Prompt(messages, customOptions);
         String response = ragChatClient.prompt(prompt)
                 .advisors(qaAdvisor) // 动态添加用户过滤的 Advisor
-                .messages(messages)
                 .call()
                 .content();
         
@@ -300,7 +298,6 @@ public class ChatServiceImpl implements ChatService {
         Prompt prompt = new Prompt(messages, customOptions);
         // 异步处理流式响应
         normalChatClient.prompt(prompt)
-                .messages(messages)
                 .stream()
                 .content()
                 .map(content -> {
@@ -433,7 +430,6 @@ public class ChatServiceImpl implements ChatService {
         // 异步处理流式响应
         ragChatClient.prompt(prompt)
                 .advisors(qaAdvisor) // 动态添加用户过滤的 Advisor
-                .messages(messages)
                 .stream()
                 .content()
                 .doOnNext(content -> {

@@ -3,10 +3,10 @@ package com.ican.config;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import org.springframework.ai.chat.client.advisor.PromptChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
-import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.MessageWindowChatMemory;
-import org.springframework.ai.chat.memory.repository.jdbc.JdbcChatMemoryRepository;
+import org.springframework.ai.chat.client.advisor.vectorstore.VectorStoreChatMemoryAdvisor;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -17,10 +17,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
 /**
- * ChatClient 配置类
- * 创建全局的 ChatClient Bean，避免每次对话都创建新实例
- * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-08
  */
 @Slf4j
@@ -31,7 +28,11 @@ public class ChatClientConfig {
     private final OpenAiChatModel openAiChatModel;
     private final VectorStore vectorStore;
     private final RAGConfig ragConfig;
-    private final JdbcChatMemoryRepository chatMemoryRepository;
+    
+    // 从 AdvisorConfig 注入三种记忆顾问
+    private final MessageChatMemoryAdvisor messageChatMemoryAdvisor;
+    private final PromptChatMemoryAdvisor promptChatMemoryAdvisor;
+    private final VectorStoreChatMemoryAdvisor vectorStoreChatMemoryAdvisor;
     
     @Value("${spring.ai.openai.chat.options.temperature}")
     private Double temperature;
@@ -41,6 +42,11 @@ public class ChatClientConfig {
 
     @Value("${chat.max-history-messages}")
     private Integer maxHistoryMessages;
+    
+    @Value("${advisor.memory.type:message}")
+    private String memoryAdvisorType;
+    
+    // ==================== ChatClient Bean 配置 ====================
     
     /**
      * 普通聊天的 ChatClient（不带 RAG）
@@ -52,7 +58,7 @@ public class ChatClientConfig {
         log.info("初始化普通聊天 ChatClient");
         
         return ChatClient.builder(openAiChatModel)
-                .defaultAdvisors()
+            .defaultAdvisors(messageChatMemoryAdvisor,promptChatMemoryAdvisor,vectorStoreChatMemoryAdvisor)  // 🎯 默认使用结构化记忆顾问
             .defaultOptions(OpenAiChatOptions.builder()
                 .temperature(temperature)
                 .maxTokens(maxTokens)
@@ -83,7 +89,7 @@ public class ChatClientConfig {
             .build();
         
         return ChatClient.builder(openAiChatModel)
-            .defaultAdvisors(qaAdvisor)
+            .defaultAdvisors(messageChatMemoryAdvisor, qaAdvisor,promptChatMemoryAdvisor,vectorStoreChatMemoryAdvisor) 
             .defaultOptions(OpenAiChatOptions.builder()
                 .temperature(temperature)
                 .maxTokens(maxTokens)
@@ -98,19 +104,6 @@ public class ChatClientConfig {
                 4. 引用性：如果可能，标注信息来源
                 5. 诚实性：如果参考资料中没有相关信息，请如实说明
                 """)
-            .build();
-    }
-    
-    /**
-     * ChatMemory Bean - 用于管理对话历史
-     * 使用 MessageWindowChatMemory 自动限制历史消息数量
-     */
-    @Bean
-    public ChatMemory chatMemory() {
-        log.info("初始化 ChatMemory，maxMessages={}", maxHistoryMessages);
-        return MessageWindowChatMemory.builder()
-            .chatMemoryRepository(chatMemoryRepository)
-            .maxMessages(maxHistoryMessages)
             .build();
     }
 }

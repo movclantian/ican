@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.*;
 /**
  * 认证控制器
  *
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-03
  */
 @Validated

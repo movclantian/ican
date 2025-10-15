@@ -3,6 +3,8 @@ package com.ican.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.ican.model.dto.DocumentQueryDTO;
 import com.ican.model.vo.DocumentFileVO;
+import com.ican.model.vo.DocumentSearchResultVO;
+import com.ican.model.vo.DocumentUploadVO;
 import com.ican.model.vo.DocumentVO;
 import org.springframework.ai.document.Document;
 import org.springframework.web.multipart.MultipartFile;
@@ -22,9 +24,9 @@ public interface DocumentService {
      * @param file 文件
      * @param type 文档类型
      * @param userId 用户ID
-     * @return 文档ID
+     * @return 文档上传响应（包含 documentId 和 taskId）
      */
-    Long uploadDocument(MultipartFile file, String type, Long userId);
+    DocumentUploadVO uploadDocument(MultipartFile file, String type, Long userId);
     
     /**
      * 分页查询用户的文档列表
@@ -61,13 +63,26 @@ public interface DocumentService {
     void vectorizeAndStore(Long documentId, String content, Long userId);
     
     /**
-     * 检索相关文档
+     * 检索相关文档 (向量检索)
      * 
      * @param query 查询文本
      * @param topK 返回数量
      * @return 相关文档列表
      */
     List<Document> searchSimilarDocuments(String query, int topK);
+    
+    /**
+     * 🆕 混合搜索 - 结合向量检索和全文检索
+     * 
+     * 使用 RRF (Reciprocal Rank Fusion) 算法融合:
+     * - 向量检索结果(语义理解)
+     * - ES 全文检索结果(关键词匹配)
+     * 
+     * @param query 搜索查询
+     * @param topK 最终返回数量
+     * @return 混合搜索结果(含高亮信息)
+     */
+    List<DocumentSearchResultVO> hybridSearch(String query, int topK);
     
     /**
      * 删除文档

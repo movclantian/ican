@@ -7,9 +7,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import top.continew.starter.web.annotation.EnableGlobalResponse;
 
 /**
- * ICan 应用启动类
- *
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-03
  */
 @EnableGlobalResponse

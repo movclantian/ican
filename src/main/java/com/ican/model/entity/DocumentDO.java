@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 /**
  * 文档实体类
  * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-06
  */
 @Data

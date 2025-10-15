@@ -16,7 +16,7 @@ import java.util.List;
 /**
  * 教学设计实体
  * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-08
  */
 @Data

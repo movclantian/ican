@@ -6,7 +6,7 @@ import com.ican.model.entity.DocumentDO;
 import com.ican.mapper.DocumentMapper;
 import com.ican.service.DocumentService;
 import com.ican.service.DocumentESService;
-import com.ican.service.DocumentTaskCacheService;
+import com.ican.service.DocumentTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -25,7 +25,7 @@ public class DocumentProcessingConsumer {
     private final DocumentMapper documentMapper;
     private final DocumentService documentService;
     private final DocumentESService documentESService;
-    private final DocumentTaskCacheService taskCacheService;
+    private final DocumentTaskService documentTaskService;
     
     /**
      * 处理文档
@@ -46,7 +46,7 @@ public class DocumentProcessingConsumer {
             if (document == null) {
                 log.error("文档不存在: documentId={}", documentId);
                 if (taskId != null) {
-                    taskCacheService.updateTaskStatus(taskId, "failed", 0, "文档不存在");
+                    documentTaskService.updateTaskStatus(taskId, "failed", 0, "文档不存在");
                 }
                 return;
             }
@@ -55,21 +55,21 @@ public class DocumentProcessingConsumer {
             document.setStatus("processing");
             documentMapper.updateById(document);
             if (taskId != null) {
-                taskCacheService.updateProgress(taskId, 20);
+                documentTaskService.updateTaskStatus(taskId, "processing", 20, null);
             }
             log.info("开始处理文档: documentId={}, title={}", documentId, document.getTitle());
             
             // 3. 解析文档内容（进度40%）
             String content = documentService.parseDocument(documentId);
             if (taskId != null) {
-                taskCacheService.updateProgress(taskId, 40);
+                documentTaskService.updateTaskStatus(taskId, "processing", 40, null);
             }
             log.info("文档解析完成: documentId={}, contentLength={}", documentId, content.length());
             
             // 4. 向量化并存储到向量数据库（进度70%）
             documentService.vectorizeAndStore(documentId, content, document.getUserId());
             if (taskId != null) {
-                taskCacheService.updateProgress(taskId, 70);
+                documentTaskService.updateTaskStatus(taskId, "processing", 70, null);
             }
             log.info("文档向量化完成: documentId={}", documentId);
             
@@ -85,19 +85,24 @@ public class DocumentProcessingConsumer {
                     "completed"
                 );
                 if (taskId != null) {
-                    taskCacheService.updateProgress(taskId, 90);
+                    documentTaskService.updateTaskStatus(taskId, "processing", 90, null);
                 }
                 log.info("文档索引到ES完成: documentId={}", documentId);
             } catch (Exception esError) {
                 log.error("ES索引失败，但不影响主流程: documentId={}", documentId, esError);
-                // ES失败不影响主流程，继续执行
+                // ES失败影响主流程，不继续执行
+                //更新错误信息
+                if (taskId != null) {
+                    documentTaskService.updateTaskStatus(taskId, "failed", 90, "ES索引失败: " + esError.getMessage());
+                }
+                return;
             }
             
             // 6. 更新状态为完成（进度100%）
             document.setStatus("completed");
             documentMapper.updateById(document);
             if (taskId != null) {
-                taskCacheService.updateTaskStatus(taskId, "completed", 100, null);
+                documentTaskService.updateTaskStatus(taskId, "completed", 100, null);
             }
             
             log.info("文档处理完成: documentId={}, title={}", documentId, document.getTitle());
@@ -124,7 +129,7 @@ public class DocumentProcessingConsumer {
                 
                 // 更新任务状态为失败
                 if (taskId != null) {
-                    taskCacheService.updateTaskStatus(taskId, "failed", 0, e.getMessage());
+                    documentTaskService.updateTaskStatus(taskId, "failed", 0, e.getMessage());
                 }
             } catch (Exception updateError) {
                 log.error("更新失败状态异常: documentId={}", documentId, updateError);

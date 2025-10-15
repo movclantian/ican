@@ -13,7 +13,7 @@ import java.util.Map;
 /**
  * 文档块实体
  * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-07
  */
 @Data

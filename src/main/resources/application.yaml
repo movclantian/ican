@@ -1,17 +1,17 @@
 --- ### 应用配置
 application:
-  id: ican
+  id: SmartPaperAI
   # 名称
-  name: ICan
+  name: SmartPaperAI
   # 描述
-  description: ICan Application
+  description: 基于 RAG 的论文智能问答系统
   # 版本
   version: 0.0.1-SNAPSHOT
   # 基本包
   base-package: com.ican
   ## 作者信息配置
   contact:
-    name: ICan
+    name: 席崇援
     email: example@example.com
     url: https://example.com
   ## 许可协议信息配置
@@ -241,9 +241,9 @@ continew-starter:
 spring.servlet:
   multipart:
     # 单个文件最大大小
-    max-file-size: 100MB
+    max-file-size: 1000MB
     # 请求最大大小
-    max-request-size: 100MB
+    max-request-size: 1000MB
 
 --- ### 验证码配置
 continew-starter.captcha:
@@ -296,7 +296,15 @@ rag:
     # 支持的文件类型
     allowed-types: pdf,docx,md,txt
     # 单个文件最大大小(MB)
-    max-file-size: 50
+    max-file-size: 500
+
+--- ### 搜索网关配置
+search:
+  # 检索策略: vector(纯向量) / fulltext(纯ES) / hybrid(混合，默认)
+  strategy: hybrid
+  # ES 初始召回数量（混合检索时使用）
+  es:
+    initial-topk: 50
   
   # 检索配置
   retrieval:
@@ -338,16 +346,17 @@ spring.ai:
       max-interval: 100000
     # 是否对客户端错误(4xx)进行重试
     on-client-errors: false
-  ## Vector Store 配置
+  ## Vector Store 配置 - Elasticsearch
   vectorstore:
-    pinecone:
-      api-key: pcsk_5K7bum_LKCbyfM8gmPhxwhXCQjkdPbc5XkA3q1JZoZ5R6L33GdPW12smEDf84iBWRCpGdc
-      index-name: springai
-      project-id: gabnl4t
-      environment: aped-4627-b74a
-      # 可选配置
-      namespace: default
-      server-side-timeout: 20s
+    elasticsearch:
+      # 是否初始化 Schema (索引结构)
+      initialize-schema: true
+      # 索引名称
+      index-name: spring-ai-document-index
+      # 向量维度 (需与 embedding 模型匹配)
+      dimensions: 1536
+      # 相似度算法: cosine(余弦), l2_norm(欧几里得), dot_product(点积)
+      similarity: cosine
   openai:
     api-key: sk-361aaafb23fd40c7bc3d3f5d9f629d03
     base-url: https://dashscope.aliyuncs.com/compatible-mode/
@@ -361,6 +370,8 @@ spring.ai:
     embedding:
       options:
         model: text-embedding-v4
+        # 显式指定向量维度为 1536（text-embedding-v4 默认是 1024，支持 64/128/256/512/768/1024/1536/2048）
+        dimensions: 1536
   ## Chat Memory 配置
   chat:
     memory:
@@ -371,11 +382,33 @@ spring.ai:
 # 自定义聊天配置
 chat:
   # 最大历史消息数量
-  max-history-messages: 10
+  max-history-messages: 20
   # 是否异步生成标题
   async-title-generation: true
 
-spring:
-  elasticsearch:
-    uris:
+--- ### Spring AI 顾问配置
+advisor:
+  # 记忆顾问配置
+  memory:
+    # 记忆顾问类型: message(结构化，默认) / prompt(文本拼接) / vector(向量检索)
+    # - message: 保留完整的消息结构（用户/助手/系统），适合多轮对话
+    # - prompt: 将历史拼接为纯文本，节省 Token
+    # - vector: 智能检索相关历史，适合大规模对话历史
+    type: message
+    # 顾问执行顺序（数字越小优先级越高，记忆顾问通常在 RAG 之前）
+    default-order: 0
+    # 向量记忆检索配置（仅在 type=vector 时生效）
+    vector-top-k: 5
+    vector-similarity-threshold: 0.7
+## GROBID 配置 (学术论文元数据提取)
+grobid:
+  # 是否启用 GROBID (需要先部署 GROBID 服务)
+  enabled: true
+  server:
+    # GROBID 服务地址
+    url: http://localhost:8070
+
+## Elasticsearch 原生客户端配置
+elasticsearch:
+  uris:
     - http://localhost:9201

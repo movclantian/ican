@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Configuration;
  * 提示词模板配置类
  * 集中管理所有的提示词模板，便于维护和优化
  * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-08
  */
 @Configuration
@@ -259,7 +259,7 @@ public class PromptTemplateConfig {
             ## 重要约束：
             ✅ 必须基于提供的论文内容进行总结，不能编造信息
             ✅ 每个文本字段都必须有实质性内容（不能是空字符串""）
-            ✅ background、methodology、results各至少200字，体现深度分析
+            ✅ background、methodology、results各至少400字，体现深度分析
             ✅ innovations数组至少包含2-3个创新点
             ✅ keywords数组至少包含3-5个关键词
             ✅ 只返回纯JSON对象，不要任何markdown标记（如```json）
@@ -289,33 +289,110 @@ public class PromptTemplateConfig {
     }
     
     /**
-     * 论文元数据抽取提示词模板（精简版）
+     * 论文元数据抽取提示词模板(增强版)
      */
     @Bean("paperMetadataExtractionPromptTemplate")
     public String paperMetadataExtractionPromptTemplate() {
         return """
-            提取论文元数据,返回JSON:
+            你是一位专业的学术文献分析专家,请从以下论文内容中准确提取完整的元数据信息。
+            
+            【论文内容】
             {context}
             
-            格式: {"documentId":{documentId},"title":"","authors":[],"year":"","publication":"","volume":"","issue":"","pages":"","doi":"","keywords":[],"abstractText":"","field":""}
+            【提取要求】
+            1. **标题(title)**: 完整的论文标题,保持原文
+            2. **作者(authors)**: 所有作者姓名,返回字符串数组,如["张三", "李四"]
+            3. **年份(year)**: 
+               - 优先从文档首页、版权页、页眉页脚提取
+               - **重要**: 如果标题中包含年份(如"专家共识2025"、"指南2024版"),必须提取出来
+               - 格式为4位数字字符串,如"2024"或"2025"
+            4. **期刊/会议(publication)**: 
+               - 发表的期刊名称、会议名称或出版机构
+               - 中文期刊也要完整提取,如"中华眼科杂志"
+               - 专家共识/指南可能没有期刊,但可能有发布机构
+            5. **卷号(volume)**: 期刊卷号,如"Vol. 10"中的"10",只提取数字部分
+            6. **期号(issue)**: 期刊期号,如"No. 3"中的"3",只提取数字部分
+            7. **页码(pages)**: 起止页码,格式如"123-145"或"1-10"
+            8. **DOI**: 数字对象唯一标识符,格式如"10.1234/example.2024"
+            9. **关键词(keywords)**: 论文关键词列表,返回字符串数组
+            10. **摘要(abstractText)**: 完整的论文摘要,保持原文
+            11. **引用数(citationCount)**: 如果文中提到引用数则提取,否则设为0
+            12. **领域(field)**: 
+                - 根据标题、摘要、关键词推断学科领域
+                - 医学相关: "医学"、"眼科学"、"临床医学"
+                - 人工智能相关: "人工智能"、"计算机科学"
+                - 必须填写,不能为空
             
-            要求: 基于原文,不编造,缺失信息用空字符串/空数组
+            【输出格式】
+            严格按照以下JSON格式返回,不要添加任何markdown标记:
+            {
+              "documentId": {documentId},
+              "title": "论文标题",
+              "authors": ["作者1", "作者2"],
+              "year": "2024",
+              "publication": "期刊或会议名称",
+              "volume": "卷号",
+              "issue": "期号",
+              "pages": "起始页-结束页",
+              "doi": "DOI编号",
+              "keywords": ["关键词1", "关键词2"],
+              "abstractText": "论文摘要内容",
+              "citationCount": 0,
+              "field": "学科领域"
+            }
+            
+            【示例】
+            如果标题是"面向人工智能应用的干眼影像分类与标注方法、流程及质量控制专家共识2025",应该:
+            - year: "2025" (从标题末尾提取)
+            - field: "眼科学" 或 "医学" (根据"干眼"、"影像"推断)
+            - publication: 可能为空(专家共识可能没有期刊)
+            - volume/issue/pages: 可能为空(专家共识通常没有)
+            
+            【注意事项】
+            - **所有字段必须包含**,即使某些信息在原文中没有找到
+            - 找不到的信息使用空字符串""(字符串字段)或空数组[](数组字段)或0(数字字段)
+            - **年份(year)和领域(field)是最重要的字段,必须尽力提取**:
+              * 年份: 仔细检查标题、首页、版权信息,标题中的数字(如2025、2024)通常就是年份
+              * 领域: 必须根据内容推断,不能为空
+            - **年份提取策略**: 
+              1. 首先检查标题是否包含4位数字(如"共识2025"中的2025)
+              2. 其次查看首页、版权页
+              3. 最后查看页眉页脚
+            - **期刊/会议**: 仔细查找论文首页、页眉或页脚;中文期刊也要完整提取
+            - **领域推断策略**: 
+              * 看关键词: "干眼"、"眼科" → "眼科学"
+              * 看摘要: "人工智能"、"深度学习" → "人工智能"  
+              * 医学+AI → "医学" 或 "人工智能在医学中的应用"
+            - 中文论文也要准确提取,保持中文原文
+            - DOI通常出现在论文首页底部或页眉页脚
+            - 专家共识、指南类文献:通常没有卷号期号页码,但**必须**提取年份
             """;
     }
     
     /**
-     * 单篇论文创新点提取提示词模板（精简版）
+     * 单篇论文创新点提取提示词模板（优化版）
      */
     @Bean("innovationExtractionPromptTemplate")
     public String innovationExtractionPromptTemplate() {
         return """
-            提取论文创新点,返回JSON数组:
+            从以下论文内容中提取创新点:
             {context}
             
-            格式: [{"description":"创新描述(突出新在哪)","noveltyScore":0.8}]
+            【输出格式】
+            严格按照以下JSON数组格式返回,只包含description和noveltyScore两个字段:
+            [
+              {
+                "description": "创新点的详细描述,突出新颖性和创新性",
+                "noveltyScore": 0.8
+              }
+            ]
             
-            类型: 新理论/算法/方法/改进/数据集/突破性成果
-            要求: 基于原文,具体到技术细节,不足时返回[]
+            【要求】
+            1. description: 具体描述创新点,说明创新在哪里(新理论/新算法/新方法/新数据集/突破性成果等)
+            2. noveltyScore: 0.0-1.0之间的分数,表示创新程度
+            3. 如果没有明显创新点,返回空数组[]
+            4. 不要添加任何额外字段(如type、category等)
+            5. 不要添加markdown标记,直接返回JSON数组
             """;
     }
     
@@ -363,6 +440,105 @@ public class PromptTemplateConfig {
             2. matrix数组长度=dimensions数组长度
             3. 每个matrix.values数组长度=papers数组长度
             4. documentId必须使用实际论文ID，descriptions要具体详细
+            """;
+    }
+    
+    /**
+     * 文献综述生成提示词模板
+     */
+    @Bean("literatureReviewPromptTemplate")
+    public String literatureReviewPromptTemplate() {
+        return """
+            你是一位资深的学术研究专家，擅长撰写高质量的文献综述。请基于以下论文信息，生成一篇结构化的文献综述。
+            
+            【论文信息】
+            {paperSummaries}
+            
+            【任务要求】
+            请综合分析这些文献，生成JSON格式的综述报告，包含以下内容：
+            
+            1. **研究现状** (researchStatus):
+               - overview: 研究领域的整体概述（200-300字）
+               - mainThemes: 提取3-5个主要研究主题
+               - representativeWorks: 列出3-5项代表性工作（包含documentId、title、contribution、impactScore 1-5分）
+            
+            2. **研究方法对比** (methodologyComparison):
+               - summary: 方法分类总结（150-200字）
+               - categories: 将论文按方法分类（每类包含categoryName、documentIds、prosAndCons）
+               - evolution: 方法演进趋势描述（100-150字）
+            
+            3. **发展趋势分析** (trendAnalysis):
+               - timeline: 按时间轴描述研究发展（200-250字）
+               - hotTopics: 列出3-5个热点主题
+               - emergingTechnologies: 列出2-4个新兴技术
+               - focusShift: 研究重心转移描述（100-150字）
+            
+            4. **研究空白与挑战** (researchGaps):
+               - unsolvedProblems: 列出3-5个尚未解决的问题
+               - methodologicalLimitations: 列出2-3个方法论上的局限
+               - dataGaps: 列出2-3个数据/资源缺口
+            
+            5. **未来研究方向** (futureDirections):
+               - directions: 列出3-5个潜在研究方向
+               - interdisciplinaryOpportunities: 列出2-3个跨学科融合机会
+               - applicationProspects: 实际应用前景描述（150-200字）
+            
+            【JSON格式要求】
+            ```json
+            {
+              "topic": "提取的综述主题（10-20字）",
+              "paperCount": 论文数量,
+              "papers": [
+                {"documentId": 123, "title": "论文标题", "authors": ["作者1", "作者2"], "year": 2023}
+              ],
+              "researchStatus": {
+                "overview": "研究领域整体概述...",
+                "mainThemes": ["主题1", "主题2", "主题3"],
+                "representativeWorks": [
+                  {"documentId": 123, "title": "论文标题", "contribution": "核心贡献描述", "impactScore": 4.5}
+                ]
+              },
+              "methodologyComparison": {
+                "summary": "方法分类总结...",
+                "categories": [
+                  {"categoryName": "深度学习方法", "documentIds": [123, 456], "prosAndCons": "优点：准确率高；缺点：计算资源需求大"}
+                ],
+                "evolution": "方法演进趋势..."
+              },
+              "trendAnalysis": {
+                "timeline": "时间轴趋势描述...",
+                "hotTopics": ["热点1", "热点2"],
+                "emergingTechnologies": ["技术1", "技术2"],
+                "focusShift": "研究重心转移..."
+              },
+              "researchGaps": {
+                "unsolvedProblems": ["问题1", "问题2"],
+                "methodologicalLimitations": ["局限1", "局限2"],
+                "dataGaps": ["数据缺口1", "数据缺口2"]
+              },
+              "futureDirections": {
+                "directions": ["方向1", "方向2"],
+                "interdisciplinaryOpportunities": ["机会1", "机会2"],
+                "applicationProspects": "应用前景描述..."
+              },
+              "keywordCloud": [
+                {"keyword": "关键词1", "frequency": 5},
+                {"keyword": "关键词2", "frequency": 3}
+              ]
+            }
+            ```
+            
+            【关键要求】
+            1. 严格基于提供的论文信息，不要编造内容
+            2. documentId 必须使用实际的论文ID
+            3. 分析要深入、客观、有洞察力
+            4. 注重论文之间的关联和对比
+            5. 突出研究脉络和演进趋势
+            6. 识别研究空白和未来机会
+            7. 关键词频率基于实际出现次数统计
+            8. 所有数组至少包含1个元素，字符串字段不能为空
+            
+            请直接返回JSON，不要包含任何其他文字说明。
             """;
     }
 }

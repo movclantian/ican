@@ -15,6 +15,7 @@ import com.ican.service.DocumentTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import top.continew.starter.core.exception.BusinessException;
@@ -22,10 +23,20 @@ import top.continew.starter.core.exception.BusinessException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * 文档任务服务实现
+ * 文档任务服务实现（整合了缓存逻辑）
+ * 
+ * 功能说明：
+ * 1. 任务生命周期管理（创建、更新、查询、重试）
+ * 2. Redis 缓存加速（进度查询、状态同步）
+ * 3. 任务清理和补偿机制
+ * 
+ * 整合历史：
+ * - 合并了 DocumentTaskCacheService 的缓存逻辑
+ * - Redis 作为可选依赖，未配置时自动降级为纯 MySQL
  * 
  * @author 席崇援
  */
@@ -41,7 +52,13 @@ public class DocumentTaskServiceImpl implements DocumentTaskService {
     private final DocumentChunkMapper documentChunkMapper;
     private final VectorStore vectorStore;
     
+    // Redis 可选依赖（未配置时为 null）
+    private final RedisTemplate<String, Object> redisTemplate;
+    
     private static final int DEFAULT_MAX_RETRIES = 3;
+    private static final String TASK_PROGRESS_PREFIX = "task:progress:";
+    private static final String TASK_STATUS_PREFIX = "task:status:";
+    private static final long CACHE_EXPIRE_HOURS = 24;
     
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -92,16 +109,34 @@ public class DocumentTaskServiceImpl implements DocumentTaskService {
             task.setProgress(100);
         }
         
+        // 更新 MySQL
         documentTaskMapper.updateById(task);
+        
+        // 更新或清理 Redis 缓存（如果可用）
+        if ("completed".equals(status) || "failed".equals(status)) {
+            // 任务结束，清理缓存（避免占用 Redis 内存）
+            removeTaskCache(taskId);
+        } else {
+            // 任务进行中，更新缓存加速查询
+            updateCache(taskId, status, progress);
+        }
         
         log.info("任务状态更新: taskId={}, status={}, progress={}", taskId, status, progress);
     }
     
     @Override
     public DocumentTaskVO getTaskStatus(Long taskId) {
+        // 尝试从 Redis 读取进度（热数据加速）
+        Integer cachedProgress = getProgressFromCache(taskId);
+        
         DocumentTaskDO task = documentTaskMapper.selectById(taskId);
         if (task == null) {
             throw new BusinessException("任务不存在");
+        }
+        
+        // 如果缓存有更新的进度，使用缓存值
+        if (cachedProgress != null && cachedProgress > task.getProgress()) {
+            task.setProgress(cachedProgress);
         }
         
         return convertToVO(task);
@@ -247,5 +282,71 @@ public class DocumentTaskServiceImpl implements DocumentTaskService {
             .endTime(task.getEndTime())
             .duration(duration)
             .build();
+    }
+    
+    // ==================== Redis 缓存方法（内部实现） ====================
+    
+    /**
+     * 更新 Redis 缓存
+     */
+    private void updateCache(Long taskId, String status, Integer progress) {
+        if (redisTemplate == null) {
+            return; // Redis 未配置，跳过
+        }
+        
+        try {
+            if (progress != null) {
+                String progressKey = TASK_PROGRESS_PREFIX + taskId;
+                redisTemplate.opsForValue().set(progressKey, progress.toString(), CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
+            }
+            
+            if (status != null) {
+                String statusKey = TASK_STATUS_PREFIX + taskId;
+                redisTemplate.opsForValue().set(statusKey, status, CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
+            }
+            
+            log.debug("Redis 缓存已更新: taskId={}, status={}, progress={}", taskId, status, progress);
+        } catch (Exception e) {
+            log.warn("Redis 缓存更新失败（不影响主流程）: taskId={}", taskId, e);
+        }
+    }
+    
+    /**
+     * 从 Redis 读取进度
+     */
+    private Integer getProgressFromCache(Long taskId) {
+        if (redisTemplate == null) {
+            return null; // Redis 未配置，返回 null
+        }
+        
+        try {
+            String key = TASK_PROGRESS_PREFIX + taskId;
+            Object value = redisTemplate.opsForValue().get(key);
+            
+            if (value != null) {
+                return Integer.valueOf(value.toString());
+            }
+        } catch (Exception e) {
+            log.warn("Redis 缓存读取失败（降级为 MySQL）: taskId={}", taskId, e);
+        }
+        
+        return null;
+    }
+    
+    /**
+     * 清理任务缓存（任务完成或失败时调用）
+     */
+    private void removeTaskCache(Long taskId) {
+        if (redisTemplate == null) {
+            return;
+        }
+        
+        try {
+            redisTemplate.delete(TASK_PROGRESS_PREFIX + taskId);
+            redisTemplate.delete(TASK_STATUS_PREFIX + taskId);
+            log.debug("Redis 缓存已清理: taskId={}", taskId);
+        } catch (Exception e) {
+            log.warn("Redis 缓存清理失败: taskId={}", taskId, e);
+        }
     }
 }

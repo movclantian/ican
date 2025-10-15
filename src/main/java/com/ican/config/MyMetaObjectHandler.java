@@ -10,7 +10,7 @@ import java.time.LocalDateTime;
  * MyBatis Plus 元数据处理器
  * 用于自动填充创建时间、更新时间、创建者、更新者等字段
  *
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-03
  */
 @Component

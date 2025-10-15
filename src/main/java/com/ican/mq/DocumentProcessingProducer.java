@@ -18,16 +18,7 @@ import org.springframework.stereotype.Component;
 public class DocumentProcessingProducer {
     
     private final RabbitTemplate rabbitTemplate;
-    
-    /**
-     * 发送文档处理消息
-     * 
-     * @param documentId 文档ID
-     * @param userId 用户ID
-     */
-    public void sendProcessingTask(Long documentId, Long userId) {
-        sendDocumentProcessingMessage(documentId, userId);
-    }
+
     
     /**
      * 发送文档处理消息（新方法，支持完整处理流程）

@@ -12,21 +12,27 @@ import com.ican.model.entity.DocumentChunkDO;
 import com.ican.model.entity.DocumentDO;
 import com.ican.model.entity.DocumentVectorDO;
 import com.ican.model.vo.DocumentFileVO;
+import com.ican.model.vo.DocumentMetadataVO;
+import com.ican.model.vo.DocumentSearchResultVO;
+import com.ican.model.vo.DocumentUploadVO;
 import com.ican.model.vo.DocumentVO;
 import com.ican.mapper.DocumentChunkMapper;
 import com.ican.mapper.DocumentMapper;
 import com.ican.mapper.DocumentVectorMapper;
 import com.ican.service.DocumentService;
+import com.ican.service.DocumentESService;
 import com.ican.service.DocumentParserService;
 import com.ican.service.FileStorageService;
 import com.ican.service.DocumentTaskService;
+import com.ican.service.GrobidMetadataService;
+import com.ican.service.SmartChunkingService;
 import com.ican.mq.DocumentProcessingProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +43,7 @@ import top.continew.starter.core.exception.BusinessException;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,10 +68,13 @@ public class DocumentServiceImpl implements DocumentService {
     private final DocumentChunkMapper documentChunkMapper;
     private final DocumentProcessingProducer documentProcessingProducer;
     private final DocumentTaskService documentTaskService;
+    private final DocumentESService documentESService;
+    private final GrobidMetadataService grobidMetadataService;  // 🆕 GROBID 元数据解析
+    private final SmartChunkingService smartChunkingService;  // 🆕 智能分块
     
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Long uploadDocument(MultipartFile file, String type, Long userId) {
+    public DocumentUploadVO uploadDocument(MultipartFile file, String type, Long userId) {
         // 1. 验证文件
         validateFile(file);
         
@@ -129,7 +139,13 @@ public class DocumentServiceImpl implements DocumentService {
             }
         );
         
-        return documentId;
+        // 返回包含 documentId 和 taskId 的 VO
+        return DocumentUploadVO.builder()
+                .documentId(documentId)
+                .taskId(taskId)
+                .title(document.getTitle())
+                .taskStatusUrl("/api/documents/tasks/" + taskId)
+                .build();
     }
     
     @Override
@@ -269,49 +285,145 @@ public class DocumentServiceImpl implements DocumentService {
         }
         
         try {
-            // 1. 文本分块
-            TokenTextSplitter splitter = new TokenTextSplitter(
+            // 🆕 1. GROBID 元数据提取(仅针对 PDF 学术论文)
+            DocumentMetadataVO grobidMetadata = null;
+            if ("pdf".equalsIgnoreCase(document.getType()) && grobidMetadataService.isAvailable()) {
+                try {
+                    log.info("尝试使用 GROBID 提取文档结构: documentId={}", documentId);
+                    
+                    // 从存储服务下载 PDF 文件
+                    byte[] pdfData = fileStorageService.downloadFile(document.getFileUrl());
+                    
+                    // 调用 GROBID 提取元数据
+                    grobidMetadata = grobidMetadataService.extractMetadata(pdfData, document.getTitle());
+                    
+                    if (grobidMetadata != null && grobidMetadata.getSections() != null) {
+                        log.info("GROBID 提取成功: documentId={}, sections={}", 
+                            documentId, grobidMetadata.getSections().size());
+                    }
+                    
+                } catch (Exception e) {
+                    log.warn("GROBID 提取失败,继续使用普通分块: documentId={}", documentId, e);
+                }
+            }
+            
+            // 🆕 2. 智能分块(替代 TokenTextSplitter)
+            List<SmartChunkingService.ChunkResult> smartChunks = smartChunkingService.smartChunk(
+                content,
+                grobidMetadata,  // 有章节信息时使用章节分块
                 ragConfig.getDocument().getChunkSize(),
-                ragConfig.getDocument().getChunkOverlap(),
-                ragConfig.getDocument().getMinChunkSizeChars(),
-                ragConfig.getDocument().getMaxChunkSizeChars(),
-                ragConfig.getDocument().getKeepSeparator()
+                ragConfig.getDocument().getChunkOverlap()
             );
+            log.info("智能分块完成: documentId={}, chunks={}, strategy={}", 
+                documentId, smartChunks.size(), 
+                smartChunks.isEmpty() ? "none" : smartChunks.get(0).getType());
             
-            // 将字符串转换为 Document 对象列表
-            Document tempDoc = new Document(content);
-            List<Document> splitDocs = splitter.split(List.of(tempDoc));
-            log.info("文档分块完成: id={}, chunks={}", documentId, splitDocs.size());
-            
-            // 2. 创建 Document 对象并添加元数据（优化：带分块索引）
+            // 🆕 3. 创建 Document 对象并添加增强元数据
             // 重要：使用 Base62 编码存储 Long ID，避免向量库 Double 精度丢失
-            // 原理：Long -> Base62字符串，完全避免精度问题（1976521493122658306 -> "aDeMo8kL6")
+            // ⚠️ 安全检查：确保每个分块不超过嵌入模型的 token 限制
+            // text-embedding-v4 理论最大 8192 tokens,但实际要留更多余量
+            int maxTokens = 6000; // 保守值,防止特殊字符和编码问题
             List<Document> documents = new ArrayList<>();
-            for (int i = 0; i < splitDocs.size(); i++) {
-                Document doc = splitDocs.get(i);
-                Map<String, Object> metadata = new HashMap<>();
-                // 使用 Hutool Base62 编码 Long ID
-                metadata.put("documentId", Base62.encode(String.valueOf(documentId)));
-                metadata.put("userId", Base62.encode(String.valueOf(userId)));
-                metadata.put("title", document.getTitle());
-                metadata.put("type", document.getType());
-                metadata.put("chunkIndex", i);  // 添加分块索引
-                metadata.put("timestamp", System.currentTimeMillis());
+            int globalChunkIndex = 0;
+            
+            for (int i = 0; i < smartChunks.size(); i++) {
+                SmartChunkingService.ChunkResult chunk = smartChunks.get(i);
                 
-                documents.add(new Document(doc.getText(), metadata));
+                // 估算 token 数 (保守估计,留足余量)
+                int estimatedTokens = estimateTokenCount(chunk.getContent());
+                
+                List<String> subChunks;
+                if (estimatedTokens > maxTokens) {
+                    // 分块过长，需要二次分割
+                    log.warn("检测到超长分块: chunkIndex={}, estimatedTokens={}, 进行二次分割", 
+                        i, estimatedTokens);
+                    subChunks = splitLongText(chunk.getContent(), maxTokens);
+                    log.info("二次分割完成: 原始1块 -> {}块", subChunks.size());
+                } else {
+                    subChunks = List.of(chunk.getContent());
+                }
+                
+                // 为每个子分块创建 Document
+                for (int j = 0; j < subChunks.size(); j++) {
+                    String subContent = subChunks.get(j);
+                    Map<String, Object> metadata = new HashMap<>();
+                    
+                    // 基础元数据
+                    metadata.put("documentId", Base62.encode(String.valueOf(documentId)));
+                    metadata.put("userId", Base62.encode(String.valueOf(userId)));
+                    metadata.put("title", document.getTitle());
+                    metadata.put("type", document.getType());
+                    metadata.put("chunkIndex", globalChunkIndex++);
+                    metadata.put("timestamp", System.currentTimeMillis());
+                    
+                    // 🆕 智能分块元数据
+                    metadata.put("chunkType", chunk.getType());
+                    metadata.put("tokenCount", estimateTokenCount(subContent));
+                    
+                    // 如果是二次分割的子块，标记原始分块索引
+                    if (subChunks.size() > 1) {
+                        metadata.put("originalChunkIndex", i);
+                        metadata.put("subChunkIndex", j);
+                    }
+                    
+                    // 🆕 章节信息(如果是章节分块)
+                    if ("section".equals(chunk.getType())) {
+                        metadata.put("sectionTitle", chunk.getSectionTitle());
+                        metadata.put("sectionLevel", chunk.getSectionLevel());
+                    }
+                    
+                    documents.add(new Document(subContent, metadata));
+                }
+            }
+            
+            log.info("文档分块处理完成: 原始分块={}, 最终分块={}", smartChunks.size(), documents.size());
+            
+            // 🔒 最终安全检查: 确保所有分块都不超过限制
+            int safeMaxTokens = 6000;
+            List<Document> safeDocuments = new ArrayList<>();
+            for (Document doc : documents) {
+                int tokens = estimateTokenCount(doc.getText());
+                if (tokens > safeMaxTokens) {
+                    log.error("发现超限分块! tokens={}, 内容预览: {}", 
+                        tokens, doc.getText().substring(0, Math.min(100, doc.getText().length())));
+                    // 跳过此分块,避免导致整个批次失败
+                    continue;
+                }
+                safeDocuments.add(doc);
+            }
+            
+            if (safeDocuments.size() < documents.size()) {
+                log.warn("过滤了 {} 个超限分块,剩余 {} 个安全分块", 
+                    documents.size() - safeDocuments.size(), safeDocuments.size());
             }
             
             // 3. 向量化并存储 - 分批处理以符合阿里云嵌入模型的批量大小限制(最多10个)
             // 优化：记录每个向量的ID和分块内容到数据库
             int batchSize = 10; // 阿里云 text-embedding-v4 限制
-            int totalBatches = (int) Math.ceil((double) documents.size() / batchSize);
+            int totalBatches = (int) Math.ceil((double) safeDocuments.size() / batchSize);
             
-            for (int i = 0; i < documents.size(); i += batchSize) {
-                int end = Math.min(i + batchSize, documents.size());
-                List<Document> batch = documents.subList(i, end);
+            for (int i = 0; i < safeDocuments.size(); i += batchSize) {
+                int end = Math.min(i + batchSize, safeDocuments.size());
+                List<Document> batch = safeDocuments.subList(i, end);
                 int currentBatch = (i / batchSize) + 1;
                 
                 log.info("向量化批次 {}/{}: 处理 {} 个文档块", currentBatch, totalBatches, batch.size());
+                
+                // 最后再检查一次批次中的每个文档
+                boolean batchSafe = true;
+                for (Document doc : batch) {
+                    int tokens = estimateTokenCount(doc.getText());
+                    if (tokens > safeMaxTokens) {
+                        log.error("批次检查失败! 发现超限文档: tokens={}", tokens);
+                        batchSafe = false;
+                        break;
+                    }
+                }
+                
+                if (!batchSafe) {
+                    log.warn("跳过不安全的批次 {}/{}", currentBatch, totalBatches);
+                    continue;
+                }
                 
                 // 添加到向量库（向量库会为每个Document生成ID）
                 vectorStore.add(batch);
@@ -352,6 +464,25 @@ public class DocumentServiceImpl implements DocumentService {
             }
             
             log.info("文档向量化完成: id={}, vectors={}", documentId, documents.size());
+            
+            // 🆕 同步到 Elasticsearch 全文索引 (用于混合搜索)
+            try {
+                documentESService.indexDocument(
+                    documentId,
+                    userId,
+                    document.getTitle(),
+                    content,  // 完整内容用于全文搜索
+                    document.getType(),
+                    document.getFileSize(),
+                    "completed"
+                );
+                log.info("文档已同步到ES全文索引: documentId={}", documentId);
+            } catch (Exception esError) {
+                log.warn("同步ES索引失败(不影响主流程): documentId={}, error={}", 
+                    documentId, esError.getMessage());
+                // 不抛异常,避免影响向量存储主流程
+            }
+            
         } catch (Exception e) {
             log.error("文档向量化失败: id={}", documentId, e);
             throw new BusinessException("文档向量化失败: " + e.getMessage());
@@ -361,15 +492,25 @@ public class DocumentServiceImpl implements DocumentService {
     @Override
     public List<Document> searchSimilarDocuments(String query, int topK) {
         try {
+            // 获取当前用户ID
+            Long userId = StpUtil.getLoginIdAsLong();
+            
             // 获取配置的相似度阈值
             double threshold = ragConfig.getRetrieval().getSimilarityThreshold();
-            log.info("开始文档检索: query={}, topK={}, similarityThreshold={}", query, topK, threshold);
+            log.info("开始文档检索: userId={}, query={}, topK={}, similarityThreshold={}", 
+                userId, query, topK, threshold);
+            
+            // 🆕 构建用户过滤条件 (只返回当前用户的文档)
+            Filter.Expression userFilter = new FilterExpressionBuilder()
+                .eq("userId", Base62.encode(String.valueOf(userId)))
+                .build();
             
             // 构建检索请求
             SearchRequest request = SearchRequest.builder()
                 .query(query)
                 .topK(topK)
                 .similarityThreshold(threshold)
+                .filterExpression(userFilter)  // 添加用户过滤
                 .build();
             
             // 执行向量检索
@@ -435,6 +576,14 @@ public class DocumentServiceImpl implements DocumentService {
                     // 删除映射记录
                     documentVectorMapper.delete(new LambdaQueryWrapper<DocumentVectorDO>()
                         .eq(DocumentVectorDO::getDocumentId, documentId));
+                    
+                    // 🆕 同步删除 ES 全文索引
+                    try {
+                        documentESService.deleteDocument(documentId);
+                        log.info("从ES删除文档索引: documentId={}", documentId);
+                    } catch (Exception esError) {
+                        log.warn("删除ES索引失败: documentId={}, error={}", documentId, esError.getMessage());
+                    }
                 } else {
                     log.warn("未找到文档向量映射记录，尝试通过metadata查询删除: documentId={}", documentId);
                     
@@ -498,7 +647,13 @@ public class DocumentServiceImpl implements DocumentService {
             throw new BusinessException("文件名不能为空");
         }
         
-        String extension = filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
+        // 检查文件扩展名
+        int lastDotIndex = filename.lastIndexOf(".");
+        if (lastDotIndex == -1 || lastDotIndex == filename.length() - 1) {
+            throw new BusinessException("无法识别的文件类型：文件缺少扩展名");
+        }
+        
+        String extension = filename.substring(lastDotIndex + 1).toLowerCase();
         if (!ragConfig.getDocument().getAllowedTypesList().contains(extension)) {
             throw new BusinessException("不支持的文件类型: " + extension);
         }
@@ -759,6 +914,307 @@ public class DocumentServiceImpl implements DocumentService {
             case "xml" -> "application/xml";
             default -> "application/octet-stream";
         };
+    }
+    
+    /**
+     * 🆕 混合搜索 - 结合向量检索和全文检索(RRF融合)
+     * 
+     * <p>算法流程:</p>
+     * <ol>
+     *   <li>向量检索: 语义理解,召回相关文档</li>
+     *   <li>全文检索: BM25算法,召回关键词匹配文档</li>
+     *   <li>RRF融合: 融合两种检索结果,提高准确率</li>
+     * </ol>
+     * 
+     * <p>RRF (Reciprocal Rank Fusion) 公式:</p>
+     * <pre>
+     * score(doc) = Σ [1 / (k + rank_i)]
+     * k = 60 (常数,降低高排名文档的权重差异)
+     * </pre>
+     * 
+     * @param query 搜索查询
+     * @param topK 最终返回数量
+     * @return 融合后的搜索结果(含高亮信息)
+     */
+    public List<DocumentSearchResultVO> hybridSearch(String query, int topK) {
+        try {
+            Long userId = StpUtil.getLoginIdAsLong();
+            
+            // 1. 向量检索 (召回 topK*2 个候选)
+            List<Document> vectorResults = searchSimilarDocuments(query, topK * 2);
+            log.info("向量检索完成: results={}", vectorResults.size());
+            
+            // 2. ES 全文检索 (召回 topK*2 个候选)
+            List<DocumentSearchResultVO> fulltextResults = 
+                documentESService.fullTextSearchWithHighlight(userId, query, topK * 2);
+            log.info("全文检索完成: results={}", fulltextResults.size());
+            
+            // 3. RRF 融合算法
+            final int K = 60;  // RRF 常数
+            var rrfScores = new java.util.HashMap<Long, Double>();
+            
+            // 3.1 向量检索结果加权
+            for (int i = 0; i < vectorResults.size(); i++) {
+                Document doc = vectorResults.get(i);
+                Long docId = extractDocumentId(doc);
+                if (docId != null) {
+                    double rrfScore = 1.0 / (K + i + 1);  // rank从0开始,+1转为从1开始
+                    rrfScores.merge(docId, rrfScore, Double::sum);
+                }
+            }
+            
+            // 3.2 全文检索结果加权
+            for (int i = 0; i < fulltextResults.size(); i++) {
+                Long docId = fulltextResults.get(i).getDocumentId();
+                double rrfScore = 1.0 / (K + i + 1);
+                rrfScores.merge(docId, rrfScore, Double::sum);
+            }
+            
+            // 4. 按 RRF 分数排序,取 topK
+            List<Long> rankedDocIds = rrfScores.entrySet().stream()
+                .sorted((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()))  // 降序
+                .limit(topK)
+                .map(java.util.Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.toList());
+            
+            // 5. 构建最终结果(优先使用全文检索结果,因为它有高亮信息)
+            List<DocumentSearchResultVO> finalResults = new ArrayList<>();
+            for (Long docId : rankedDocIds) {
+                // 优先从全文检索结果中查找
+                fulltextResults.stream()
+                    .filter(r -> r.getDocumentId().equals(docId))
+                    .findFirst()
+                    .ifPresentOrElse(
+                        result -> {
+                            result.setScore(rrfScores.get(docId));  // 更新为 RRF 分数
+                            result.setSource("hybrid");  // 标记为混合搜索
+                            finalResults.add(result);
+                        },
+                        () -> {
+                            // 如果全文检索中没有,从向量检索中提取
+                            vectorResults.stream()
+                                .filter(doc -> docId.equals(extractDocumentId(doc)))
+                                .findFirst()
+                                .ifPresent(doc -> {
+                                    DocumentSearchResultVO result = buildResultFromVectorDoc(doc, query, rrfScores.get(docId));
+                                    finalResults.add(result);
+                                });
+                        }
+                    );
+            }
+            
+            log.info("混合搜索完成: query={}, vectorResults={}, fulltextResults={}, fusedResults={}", 
+                query, vectorResults.size(), fulltextResults.size(), finalResults.size());
+            
+            return finalResults;
+            
+        } catch (Exception e) {
+            log.error("混合搜索失败: query={}", query, e);
+            return new ArrayList<>();
+        }
+    }
+    
+    /**
+     * 估算文本的 token 数量
+     * 保守估算策略:
+     * - 中文字符: 1.2 tokens/字 (考虑标点和特殊字符)
+     * - 英文单词: 1.5 tokens/词 (考虑长单词会被分割)
+     * - 数字和符号: 1.5 tokens/字符
+     * - 总是向上取整并添加 20% 安全边际
+     */
+    private int estimateTokenCount(String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        
+        int totalTokens = 0;
+        int chineseChars = 0;
+        int otherChars = 0;
+        int englishWords = 0;
+        
+        // 统计不同类型的字符
+        for (char c : text.toCharArray()) {
+            if (c >= 0x4E00 && c <= 0x9FFF) {
+                // 中文字符
+                chineseChars++;
+            } else if (!Character.isWhitespace(c)) {
+                // 非空白字符(英文、数字、符号等)
+                otherChars++;
+            }
+        }
+        
+        // 估算英文单词数
+        String[] words = text.split("\\s+");
+        for (String word : words) {
+            if (word.matches(".*[a-zA-Z].*")) {
+                englishWords++;
+            }
+        }
+        
+        // 保守估算 (向上取整)
+        totalTokens += (int) Math.ceil(chineseChars * 1.2);  // 中文: 1.2 tokens/字
+        totalTokens += (int) Math.ceil(englishWords * 1.5);  // 英文: 1.5 tokens/词
+        totalTokens += (int) Math.ceil(otherChars * 0.5);    // 其他字符
+        
+        // 添加 20% 安全边际
+        totalTokens = (int) Math.ceil(totalTokens * 1.2);
+        
+        return totalTokens;
+    }
+    
+    /**
+     * 分割过长的文本为多个子块
+     * 按句子边界分割,尽量保持语义完整性
+     * 使用更保守的阈值确保不会超限
+     */
+    private List<String> splitLongText(String text, int maxTokens) {
+        List<String> chunks = new ArrayList<>();
+        
+        // 使用更保守的分割阈值 (70% 而不是 90%)
+        int safeMaxTokens = (int) (maxTokens * 0.7);
+        
+        // 按句子分割(支持中英文句子)
+        String[] sentences = text.split("(?<=[。！？\\.!?])\\s*");
+        
+        StringBuilder currentChunk = new StringBuilder();
+        int currentTokens = 0;
+        
+        for (String sentence : sentences) {
+            if (sentence.trim().isEmpty()) {
+                continue;
+            }
+            
+            int sentenceTokens = estimateTokenCount(sentence);
+            
+            // 单个句子超过限制,强制按字符分割
+            if (sentenceTokens > safeMaxTokens) {
+                // 先保存当前累积的分块
+                if (currentChunk.length() > 0) {
+                    chunks.add(currentChunk.toString().trim());
+                    currentChunk = new StringBuilder();
+                    currentTokens = 0;
+                }
+                
+                // 按更小的单位分割超长句子
+                // 每次取 500 个字符(约 600 tokens)
+                int charLimit = 500;
+                for (int i = 0; i < sentence.length(); i += charLimit) {
+                    int end = Math.min(i + charLimit, sentence.length());
+                    String subSentence = sentence.substring(i, end);
+                    
+                    // 确保子句不超过限制
+                    if (estimateTokenCount(subSentence) > safeMaxTokens) {
+                        // 继续减半
+                        int halfLimit = charLimit / 2;
+                        for (int j = i; j < end; j += halfLimit) {
+                            int halfEnd = Math.min(j + halfLimit, end);
+                            chunks.add(sentence.substring(j, halfEnd).trim());
+                        }
+                    } else {
+                        chunks.add(subSentence.trim());
+                    }
+                }
+                continue;
+            }
+            
+            // 检查添加当前句子是否会超过限制
+            if (currentTokens + sentenceTokens > safeMaxTokens) {
+                if (currentChunk.length() > 0) {
+                    chunks.add(currentChunk.toString().trim());
+                    currentChunk = new StringBuilder();
+                    currentTokens = 0;
+                }
+            }
+            
+            // 添加句子到当前分块
+            if (currentChunk.length() > 0) {
+                currentChunk.append(" ");
+            }
+            currentChunk.append(sentence);
+            currentTokens += sentenceTokens;
+        }
+        
+        // 添加最后一个分块
+        if (currentChunk.length() > 0) {
+            String lastChunk = currentChunk.toString().trim();
+            if (!lastChunk.isEmpty()) {
+                chunks.add(lastChunk);
+            }
+        }
+        
+        // 安全检查: 确保所有分块都不超过限制
+        List<String> safeChunks = new ArrayList<>();
+        for (String chunk : chunks) {
+            if (estimateTokenCount(chunk) > safeMaxTokens) {
+                // 如果还是超限,按字符强制截断
+                log.warn("分块仍然超限,强制截断: estimatedTokens={}", estimateTokenCount(chunk));
+                int charLimit = 400; // 更保守的限制
+                for (int i = 0; i < chunk.length(); i += charLimit) {
+                    int end = Math.min(i + charLimit, chunk.length());
+                    safeChunks.add(chunk.substring(i, end).trim());
+                }
+            } else {
+                safeChunks.add(chunk);
+            }
+        }
+        
+        // 如果最终还是没有分块(不应该发生),返回截断的文本
+        if (safeChunks.isEmpty()) {
+            log.error("文本分割失败,使用截断策略");
+            int charLimit = 400;
+            for (int i = 0; i < text.length(); i += charLimit) {
+                int end = Math.min(i + charLimit, text.length());
+                safeChunks.add(text.substring(i, end).trim());
+            }
+        }
+        
+        return safeChunks;
+    }
+    
+    /**
+     * 从 Spring AI Document 中提取文档 ID
+     */
+    private Long extractDocumentId(Document doc) {
+        try {
+            // Spring AI VectorStore 使用 Base62 编码存储 ID
+            String encodedId = doc.getId();
+            // Base62.decode() 返回 byte[], 需要先转为 String 再转 Long
+            String decodedStr = new String(Base62.decode(encodedId));
+            return Long.valueOf(decodedStr);
+        } catch (Exception e) {
+            log.warn("解析文档ID失败: encodedId={}", doc.getId(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * 从向量检索结果构建 DocumentSearchResultVO
+     */
+    private DocumentSearchResultVO buildResultFromVectorDoc(Document doc, String query, Double rrfScore) {
+        Long docId = extractDocumentId(doc);
+        String content = doc.getText();
+        
+        // 提取关键词
+        List<String> keywords = Arrays.stream(query.trim().split("\\s+"))
+            .filter(StrUtil::isNotBlank)
+            .distinct()
+            .collect(java.util.stream.Collectors.toList());
+        
+        // 提取片段
+        String snippet = content.length() > 300 
+            ? content.substring(0, 300) + "..." 
+            : content;
+        
+        return DocumentSearchResultVO.builder()
+            .documentId(docId)
+            .title(doc.getMetadata().getOrDefault("title", "未知标题").toString())
+            .type(doc.getMetadata().getOrDefault("type", "unknown").toString())
+            .fileSize(null)  // 向量库中未存储文件大小
+            .snippet(snippet)
+            .keywords(keywords)
+            .score(rrfScore)
+            .source("hybrid")
+            .build();
     }
 }
 

@@ -10,7 +10,7 @@ import java.io.Serializable;
 /**
  * 文档处理消息
  * 
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-06
  */
 @Data

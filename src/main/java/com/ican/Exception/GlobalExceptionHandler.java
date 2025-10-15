@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
  * 全局异常处理器
  * 配合 Graceful Response 使用,直接抛出 BusinessException
  *
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-03
  */
 @Slf4j

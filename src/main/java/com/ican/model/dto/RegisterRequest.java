@@ -10,7 +10,7 @@ import lombok.Data;
 /**
  * 注册请求
  *
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-03
  */
 @Data

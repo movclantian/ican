@@ -7,7 +7,7 @@ import org.apache.ibatis.annotations.Mapper;
 /**
  * 用户 Mapper
  *
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-03
  */
 @Mapper

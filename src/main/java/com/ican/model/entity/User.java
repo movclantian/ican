@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 /**
  * 用户实体
  *
- * @author ICan
+ * @author 席崇援
  * @since 2024-10-03
  */
 @Data
